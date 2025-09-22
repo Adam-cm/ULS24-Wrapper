@@ -1,4 +1,7 @@
-*.log
-*.lib
+*.pch
+*.pchast
+/x64/
 /Debug/
 /.vs/
+*.log
+*.lib
