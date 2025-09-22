@@ -1,0 +1,542 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0-rtm.5.json",
+  "runs": [
+    {
+      "results": [
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::MaxWord' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::MaxWord"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::trim_buff' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::trim_buff"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::tbuff_size' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::tbuff_size"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::tbuff_rptr' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::tbuff_rptr"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::version' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::version"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::id' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::id"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::num_pages' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::num_pages"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::channel_format' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::channel_format"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::well_format' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::well_format"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::num_channels' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::num_channels"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::num_wells' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::num_wells"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::serial_number2' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::serial_number2"
+          }
+        },
+        {
+          "ruleId": "C26495",
+          "message": {
+            "text": "Variable 'CTrimReader::serial_number1' is uninitialized. Always initialize a member variable (type.6)."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 62,
+                  "startColumn": 14
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::{ctor}",
+                  "decoratedName": "??0CTrimReader@@QEAA@XZ",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "targetSymbol": "CTrimReader::serial_number1"
+          }
+        },
+        {
+          "ruleId": "C6283",
+          "message": {
+            "text": "'buf' is allocated with array new [], but deleted with scalar delete."
+          },
+          "analysisTarget": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                },
+                "region": {
+                  "startLine": 97,
+                  "startColumn": 9
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "CTrimReader::Load",
+                  "decoratedName": "?Load@CTrimReader@@QEAAHPEA_W@Z",
+                  "kind": "function"
+                }
+              ]
+            }
+          ],
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                          },
+                          "region": {
+                            "startLine": 91,
+                            "startColumn": 14
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "physicalLocation": {
+                          "artifactLocation": {
+                            "uri": "file:///C:/Users/Adam1/source/repos/TestCI/TestCl/TrimReader.cpp"
+                          },
+                          "region": {
+                            "startLine": 97,
+                            "startColumn": 9
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "PREfast",
+          "fullName": "MSVC Code Analysis",
+          "version": "14.44.35217.0",
+          "informationUri": "https://aka.ms/cpp/ca"
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ],
+      "artifacts": [
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.cpp"
+          },
+          "roles": [
+            "analysisTarget",
+            "resultFile"
+          ],
+          "hashes": {
+            "sha-256": "d81fb97fd7fdb1be8cde03788372e33f143508923216f12bbcaaee6a7be0ec43"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/stdafx.h"
+          },
+          "hashes": {
+            "sha-256": "c08a07e9161858ff6f5abfdaf3bb4705a5d97b4aae52564c10e7352bc5abb348"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/targetver.h"
+          },
+          "hashes": {
+            "sha-256": "a2761fdbd4c8925741ddea678ee8398de930207e447666bc6a76d5f72684c04f"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.h"
+          },
+          "hashes": {
+            "sha-256": "9abaae65e2809fabe032ed8c1398f6207a16bfccc634176e220bcaae6f352590"
+          }
+        }
+      ]
+    }
+  ]
+}

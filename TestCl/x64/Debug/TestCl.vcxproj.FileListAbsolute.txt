@@ -1,0 +1,2 @@
+C:\Users\Adam1\source\repos\TestCI\x64\Debug\TestCl.dll.lastcodeanalysissucceeded
+C:\Users\Adam1\source\repos\TestCI\TestCl\x64\Debug\NativeCodeAnalysis.read.1.tlog

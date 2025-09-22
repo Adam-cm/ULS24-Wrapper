@@ -1,0 +1,115 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0-rtm.5.json",
+  "runs": [
+    {
+      "results": [],
+      "tool": {
+        "driver": {
+          "name": "PREfast",
+          "fullName": "MSVC Code Analysis",
+          "version": "14.44.35217.0",
+          "informationUri": "https://aka.ms/cpp/ca"
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ],
+      "artifacts": [
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/testcl.cpp"
+          },
+          "roles": [
+            "analysisTarget"
+          ],
+          "hashes": {
+            "sha-256": "665ed70471ea5646d3c26cd10ed2e6eaa7bbbd897f0160d3aeef9a7502f8a41e"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/stdafx.h"
+          },
+          "hashes": {
+            "sha-256": "c08a07e9161858ff6f5abfdaf3bb4705a5d97b4aae52564c10e7352bc5abb348"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/targetver.h"
+          },
+          "hashes": {
+            "sha-256": "a2761fdbd4c8925741ddea678ee8398de930207e447666bc6a76d5f72684c04f"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/testcl.h"
+          },
+          "hashes": {
+            "sha-256": "245ff9031a96ef2ffade37bd506c2cf3e602747e29b80a41cb2be9f3c9691154"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/resource.h"
+          },
+          "hashes": {
+            "sha-256": "79196d5ccbf0290f8cbffe59c001978c0c803a64d3dd2a9f7a7c92b1840309f6"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/interfaceobj.h"
+          },
+          "hashes": {
+            "sha-256": "db599ae9354b925fee3af67b071dbe9a461ce3f89813160e472b3f0256b5fa43"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/trimreader.h"
+          },
+          "hashes": {
+            "sha-256": "9abaae65e2809fabe032ed8c1398f6207a16bfccc634176e220bcaae6f352590"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/hidmgr.h"
+          },
+          "hashes": {
+            "sha-256": "84f4578e40b66e4d32cca3dcba40292f1ed4f62cc78b05c59bad11650048c677"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/hidsdi.h"
+          },
+          "hashes": {
+            "sha-256": "467eb2e5eb67ea90987f642777601bd989bc9be83a4d81d7bf2b1b3fe8780fdc"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/hidusage.h"
+          },
+          "hashes": {
+            "sha-256": "e45928c2e291e93d2dbff39e49e631046a63d659fca2b4a33c44f12c3fd4bf13"
+          }
+        },
+        {
+          "location": {
+            "uri": "file:///c:/users/adam1/source/repos/testci/testcl/hidpi.h"
+          },
+          "hashes": {
+            "sha-256": "4a65f1508c30b2b8902f551f498dda0063f93baa6c7f4cbd4e52ccdd703ee4d2"
+          }
+        }
+      ]
+    }
+  ]
+}

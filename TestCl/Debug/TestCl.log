@@ -1,2 +1,12 @@
-﻿  InterfaceObj.cpp
-  TestCl.vcxproj -> C:\Users\zding\Documents\WorkArea\SDK\TestCI\Debug\TestCl.exe
+﻿  stdafx.cpp
+  HidMgr.cpp
+  InterfaceObj.cpp
+  InterfaceWrapper.cpp
+  TestCl.cpp
+  TrimReader.cpp
+C:\Users\Adam1\source\repos\TestCI\TestCl\TrimReader.cpp(88,11): warning C4244: 'initializing': conversion from 'ULONGLONG' to 'DWORD', possible loss of data
+  (compiling source file '/TrimReader.cpp')
+  
+  Generating Code...
+  LINK : C:\Users\Adam1\source\repos\TestCI\Debug\TestCl.dll not found or not built by the last incremental link; performing full link
+  TestCl.vcxproj -> C:\Users\Adam1\source\repos\TestCI\Debug\TestCl.dll

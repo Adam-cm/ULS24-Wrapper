@@ -8,6 +8,8 @@
 
 #define MAX_LOADSTRING 256
 
+extern int Continue_Flag;
+
 extern "C" {
 
 	// This file is in the Windows DDK available from Microsoft.

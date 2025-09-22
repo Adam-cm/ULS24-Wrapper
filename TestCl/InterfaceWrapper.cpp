@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "InterfaceObj.h"
 #include "HidMgr.h"
 
@@ -5,25 +6,31 @@ extern CInterfaceObject theInterfaceObject;
 
 extern "C" {
 
-    void selchan(int chan) {
+    __declspec(dllexport) void selchan(int chan) {
         theInterfaceObject.SelSensor(chan);
     }
 
-    void get(int chan) {
+    __declspec(dllexport) void get(int chan) {
         theInterfaceObject.CaptureFrame12(chan);
-        // Optionally, add code to export data if needed
+    }
+    
+    __declspec(dllexport) void get_frame12(int* outbuf) {
+        for (int i = 0; i < 12; ++i) {
+            for (int j = 0; j < 12; ++j) {
+                outbuf[i * 12 + j] = theInterfaceObject.frame_data[i][j];
+            }
+        }
     }
 
-    void setinttime(float itime) {
+    __declspec(dllexport) void setinttime(float itime) {
         theInterfaceObject.SetIntTime(itime);
     }
 
-    void setgain(int gain) {
+    __declspec(dllexport) void setgain(int gain) {
         theInterfaceObject.SetGainMode(gain);
     }
 
-    void reset() {
+    __declspec(dllexport) void reset() {
         FindTheHID();
     }
-
 }
