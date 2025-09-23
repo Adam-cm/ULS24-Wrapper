@@ -14,6 +14,8 @@ extern "C" {
 bool DeviceNameMatch(LPARAM lParam);
 #endif
 
+#include <vector>
+
 #define MAX_LOADSTRING 256
 
 extern int Continue_Flag;
@@ -21,20 +23,32 @@ extern int Continue_Flag;
 #define TxNum 64        // the number of the buffer for sent data to HID
 #define RxNum 64        // the number of the buffer for received data from HID
 
-#define HIDREPORTNUM 64+1       //  HID report num bytes
+#define HIDREPORTNUM (64+1)       //  HID report num bytes
 #define HIDBUFSIZE 12
 
 #define GetCmd      0x02        // return 0x02 command 
 #define ReadCmd     0x04        // Read command
 
-// Only declare these if you actually use them on Linux, otherwise guard or remove
+// HID device management
 bool FindTheHID();
 void CloseHandles();
+
+// HID threaded read management
+void StartHidReadThread();
+void StopHidReadThread();
+bool GetNextHidReport(std::vector<uint8_t>& report);
+bool ReadHIDInputReportFromQueue();
+bool ReadHIDInputReportBlocking();
+
+// HID report I/O
+bool WriteHIDOutputReport(int length);
+void WriteHIDOutputReport(void);
+void ReadHIDInputReport(void);
+
+// (Legacy/Windows-specific, can be guarded or removed if not used on Linux)
 void DisplayInputReport();
 void DisplayReceivedData(char ReceivedByte);
 void GetDeviceCapabilities();
 void PrepareForOverlappedTransfer();
 void ReadAndWriteToDevice();
-void ReadHIDInputReport();
 void RegisterForDeviceNotifications();
-void WriteHIDOutputReport();
