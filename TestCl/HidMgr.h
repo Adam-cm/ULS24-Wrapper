@@ -28,7 +28,7 @@ extern "C" {
 #define GetCmd		0x02			// return 0x02 command 
 #define ReadCmd		0x04			// Read command
 
-	BOOL DeviceNameMatch(LPARAM lParam);
+	bool DeviceNameMatch(LPARAM lParam);
 	bool FindTheHID();
 	void CloseHandles();
 	void DisplayInputReport();

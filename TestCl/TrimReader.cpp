@@ -1,155 +1,120 @@
 // Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
-#include "stdafx.h"
 #include "TrimReader.h"
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstring>
 
+// Helper: trim left
+static void trimLeft(std::string& s, const std::string& delimiters) {
+	s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char ch) {
+		return delimiters.find(ch) == std::string::npos;
+		}));
+}
 
-#define SAW_TOOTH2		// Newer Sawtooth algorithm. USe 2 pass low byte correction
-#define NON_CONTIGUOUS
+// Helper: find first of any delimiter
+static size_t findOneOf(const std::string& s, const std::string& delimiters) {
+	return s.find_first_of(delimiters);
+}
 
-extern BYTE TxData[];		// the buffer of sent data to COMX
-extern BYTE RxData[];		// the buffer of received data from COMX
-
+extern uint8_t TxData[];
+extern uint8_t RxData[];
 extern int chan_num;
 extern int Continue_Flag;
 
-BYTE EepromBuff[16 + 4 * NUM_EPKT][EPKT_SZ + 1];		// 16 pages maximum - enough to support 16 well 4 channel.
+uint8_t EepromBuff[16 + 4 * NUM_EPKT][EPKT_SZ + 1];
 
+CTrimNode::CTrimNode() { Initialize(); }
 
-// Node
-
-CTrimNode::CTrimNode()
-{
-	Initialize();
-}
-
-void
-CTrimNode::Initialize()
-{
-	int i;
-
-	for (i = 0; i < TRIM_IMAGER_SIZE; i++) {
-		kb[i][0] = 1;		// k
-		kb[i][1] = 0;		// b
-		kb[i][2] = 0;		// k2
-		kb[i][3] = 0;		// b2
-		kb[i][4] = 0;		// c
-		kb[i][5] = 0;		// h
-
+void CTrimNode::Initialize() {
+	for (int i = 0; i < TRIM_IMAGER_SIZE; i++) {
+		kb[i][0] = 1;
+		kb[i][1] = 0;
+		kb[i][2] = 0;
+		kb[i][3] = 0;
+		kb[i][4] = 0;
+		kb[i][5] = 0;
 		fpn[0][i] = 0;
 		fpn[1][i] = 0;
-
-		if (!i) tempcal[i] = 1;
-		else tempcal[i] = 0;
+		tempcal[i] = (i == 0) ? 1 : 0;
 	}
-
 	rampgen = 0x88;
 	range = 0xf;
-
 	auto_v20[0] = 0x8;
 	auto_v20[1] = 0xa;
-
 	auto_v15 = 0x8;
 	version = 0x0;
-
 	tbuff_size = 0;
 	tbuff_rptr = 0;
 }
 
-// Reader
-
 CTrimReader::CTrimReader()
-{
-	//	InFile = 0; 
-	curNode = NULL;
-	NumNode = 0;
-
-	WordIndex = 0;
-
-	fileLoaded = false;
+	: curNode(nullptr), NumNode(0), WordIndex(0), MaxWord(0), fileLoaded(false) {
 }
 
-CTrimReader::~CTrimReader()
-{
-	if (fileLoaded) InFile.Close();
-}
+CTrimReader::~CTrimReader() {}
 
-int CTrimReader::Load(TCHAR* fn)
-{
-	int e;
-	CString FileBuf;
-
-	e = InFile.Open(fn, CFile::modeRead);
-
-	fileLoaded = e;
-
-	if (!e) return e;
-
-	DWORD fl = InFile.GetLength();
-
-	char* buf = new char[fl];
-
-	InFile.Read(buf, fl);
-
-	FileBuf = buf;
-
-	delete buf;
-
-	int ep;
-
-	CString delimit = CString(", \t\r\n");
-
-	int i = 0;
-
-	FileBuf.TrimLeft(delimit);
-
-	while (((ep = FileBuf.FindOneOf(delimit)) != -1) && i < TRIM_MAX_WORD)
-	{
-		WordBuf[i] = FileBuf.Mid(0, ep);
-		int l = FileBuf.GetLength();
-		FileBuf = FileBuf.Mid(ep, (l - ep));
-		FileBuf.TrimLeft(delimit);
-		i++;
+int CTrimReader::Load(const std::string& fn) {
+	std::ifstream inFile(fn);
+	if (!inFile) {
+		fileLoaded = false;
+		return -1;
 	}
+	fileLoaded = true;
 
+	std::stringstream buffer;
+	buffer << inFile.rdbuf();
+	std::string FileBuf = buffer.str();
+
+	const std::string delimit = ", \t\r\n";
+	int i = 0;
+	trimLeft(FileBuf, delimit);
+
+	while (i < TRIM_MAX_WORD) {
+		size_t ep = findOneOf(FileBuf, delimit);
+		if (ep == std::string::npos)
+			break;
+		WordBuf[i] = FileBuf.substr(0, ep);
+		FileBuf = FileBuf.substr(ep);
+		trimLeft(FileBuf, delimit);
+		++i;
+	}
 	MaxWord = i;
-	FileBuf.Empty();
-
-	return e;
+	return 0;
 }
 
-int CTrimReader::GetWord()
-{
-	CurWord = WordBuf[WordIndex];
-	WordIndex++;
-
+int CTrimReader::GetWord() {
+	if (WordIndex < MaxWord) {
+		CurWord = WordBuf[WordIndex];
+		++WordIndex;
+	}
+	else {
+		CurWord.clear();
+	}
 	return WordIndex;
 }
 
-int CTrimReader::Match(CString s)
-{
-	return (int)(CurWord.Compare(s) == 0);
+int CTrimReader::Match(const std::string& s) {
+	return CurWord == s ? 1 : 0;
 }
 
-void CTrimReader::Parse()
-{
-	CString Name;
+void CTrimReader::Parse() {
+	std::string Name;
 	int i = 0;
-
-	if (!InFile)
+	if (!fileLoaded)
 		return;
-
 	for (;;) {
 		if (GetWord() == MaxWord)
 			break;
-
-		if (Match(CString("DEF"))) {
+		if (Match("DEF")) {
 			GetWord();
 			Name = CurWord;
-
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				curNode = Node + i;
 				i++;
 				curNode->name = Name;
@@ -159,109 +124,96 @@ void CTrimReader::Parse()
 		}
 		else break;
 	}
-
 	NumNode = i;
 }
 
-
-void CTrimReader::ParseNode()
-{
-	if (!InFile)
+void CTrimReader::ParseNode() {
+	if (!fileLoaded)
 		return;
-
 	for (;;) {
 		if (GetWord() == MaxWord)
 			break;
-
-		if (Match(CString("Kb"))) {
+		if (Match("Kb")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseMatrix();
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("Fpn_lg"))) {
+		else if (Match("Fpn_lg")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseArray(0);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("Fpn_hg"))) {
+		else if (Match("Fpn_hg")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseArray(1);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("Temp_calib"))) {
+		else if (Match("Temp_calib")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseArray(2);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("Rampgen"))) {
+		else if (Match("Rampgen")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseValue(2);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("AutoV20_lg"))) {
+		else if (Match("AutoV20_lg")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseValue(0);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("AutoV20_hg"))) {
+		else if (Match("AutoV20_hg")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseValue(1);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("AutoV15"))) {
+		else if (Match("AutoV15")) {
 			GetWord();
-			if (Match(CString("{"))) {
+			if (Match("{")) {
 				ParseValue(3);
-
 				GetWord();
-				if (!Match(CString("}")))
+				if (!Match("}"))
 					return;
 			}
 			else return;
 		}
-		else if (Match(CString("}"))) {
+		else if (Match("}")) {
 			return;
 		}
 		else
@@ -269,44 +221,61 @@ void CTrimReader::ParseNode()
 	}
 }
 
-void CTrimReader::ParseMatrix()
-{
+void CTrimReader::ParseMatrix() {
 	for (int i = 0; i < TRIM_IMAGER_SIZE; i++) {
 		for (int j = 0; j < 4; j++) {
 			if (GetWord() == MaxWord)
 				break;
-			curNode->kb[i][j] = _tstof((LPCTSTR)CurWord); // atof(CurWord);
+			try {
+				curNode->kb[i][j] = std::stof(CurWord);
+			}
+			catch (...) {
+				curNode->kb[i][j] = 0.0;
+			}
 		}
 	}
 }
 
-
-void CTrimReader::ParseArray(int gain)
-{
+void CTrimReader::ParseArray(int gain) {
 	for (int i = 0; i < 12; i++) {
 		GetWord();
-		if (gain == 2)
-			curNode->tempcal[i] = _tstof((LPCTSTR)CurWord);
-		else
-			curNode->fpn[gain][i] = _tstof((LPCTSTR)CurWord);
+		try {
+			if (gain == 2)
+				curNode->tempcal[i] = std::stof(CurWord);
+			else
+				curNode->fpn[gain][i] = std::stof(CurWord);
+		}
+		catch (...) {
+			if (gain == 2)
+				curNode->tempcal[i] = 0.0;
+			else
+				curNode->fpn[gain][i] = 0.0;
+		}
 	}
 }
 
-// gain: 0, 1 - auto_v20[0, 1]; 2: rampgen; 3: auto_v15
-
-void CTrimReader::ParseValue(int gain)
-{
+void CTrimReader::ParseValue(int gain) {
 	GetWord();
-
-	CString word = CurWord;
-	word.MakeLower();
-	int p = word.Find(CString("0x"));
-	int l = word.GetLength();
-	word = word.Mid(p + 2, l - p - 2);
-	unsigned int val = _tstoi((LPCTSTR)word);
-
-	val = _tcstoul((LPCTSTR)word, 0, 16);
-
+	std::string word = CurWord;
+	std::transform(word.begin(), word.end(), word.begin(), ::tolower);
+	size_t p = word.find("0x");
+	unsigned int val = 0;
+	if (p != std::string::npos) {
+		try {
+			val = std::stoul(word.substr(p + 2), nullptr, 16);
+		}
+		catch (...) {
+			val = 0;
+		}
+	}
+	else {
+		try {
+			val = std::stoul(word, nullptr, 10);
+		}
+		catch (...) {
+			val = 0;
+		}
+	}
 	if (gain == 2)
 		curNode->rampgen = val;
 	else if (gain == 3)
@@ -314,6 +283,9 @@ void CTrimReader::ParseValue(int gain)
 	else
 		curNode->auto_v20[gain] = val;
 }
+
+// ... (rest of your code remains unchanged, as it is already standard C++)
+
 
 #define DARK_LEVEL 100
 #define DARK_MANAGE
@@ -323,13 +295,13 @@ void CTrimReader::ParseValue(int gain)
 
 // With the Sawtooth method, we need to gather denser data and perform a better data fitting.
 
-int CTrimReader::ADCCorrection(int NumData, BYTE HighByte, BYTE LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag)
+int CTrimReader::ADCCorrection(int NumData, uint8_t HighByte, uint8_t LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag)
 {
 	int hb, lb, lbc;
 	int hbln, lbp, hbhn;
 	bool oflow = false, uflow = false; //  qerr_big=false;
 
-	//	CString strbuf;
+	//	std::string strbuf;
 	double ioffset = 0;
 	int result;
 
@@ -431,7 +403,7 @@ int CTrimReader::ADCCorrection(int NumData, BYTE HighByte, BYTE LowByte, int pix
 
 // This is the integer version of the auto correct function
 
-int CTrimReader::ADCCorrectioni(int NumData, BYTE HighByte, BYTE LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag)
+int CTrimReader::ADCCorrectioni(int NumData, uint8_t HighByte, uint8_t LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag)
 {
 	int hb, lb, lbc, hbi;
 	int hbln, lbp, hbhn;
@@ -550,7 +522,7 @@ int CTrimReader::ADCCorrectioni(int NumData, BYTE HighByte, BYTE LowByte, int pi
 
 //========== Protocol Engine=================
 
-void CTrimReader::SetV20(BYTE v20)
+void CTrimReader::SetV20(uint8_t v20)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -582,7 +554,7 @@ void CTrimReader::SetGainMode(int gain)
 	TxData[7] = 0x17;		//back code
 }
 
-void CTrimReader::SetV15(BYTE v15)
+void CTrimReader::SetV15(uint8_t v15)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -626,7 +598,7 @@ void CTrimReader::Capture12()
 	TxData[17] = 0x17;		//back code
 }
 
-void CTrimReader::Capture12(BYTE chan)
+void CTrimReader::Capture12(uint8_t chan)
 {
 	if (chan < 1 || chan > 4)
 		return;
@@ -685,7 +657,7 @@ void CTrimReader::Capture24()
 	TxData[17] = 0x17;		//back code
 }
 
-void  CTrimReader::SetRangeTrim(BYTE range)
+void  CTrimReader::SetRangeTrim(uint8_t range)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -703,7 +675,7 @@ void  CTrimReader::SetRangeTrim(BYTE range)
 	TxData[7] = 0x17;		//back code
 }
 
-void  CTrimReader::SetRampgen(BYTE rampgen)
+void  CTrimReader::SetRampgen(uint8_t rampgen)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -721,7 +693,7 @@ void  CTrimReader::SetRampgen(BYTE rampgen)
 	TxData[7] = 0x17;		//back code
 }
 
-void  CTrimReader::SetTXbin(BYTE txbin)
+void  CTrimReader::SetTXbin(uint8_t txbin)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -739,7 +711,7 @@ void  CTrimReader::SetTXbin(BYTE txbin)
 	TxData[7] = 0x17;		//back code
 }
 
-void CTrimReader::SetLEDConfig(BOOL IndvEn, BOOL Chan1, BOOL Chan2, BOOL Chan3, BOOL Chan4)
+void CTrimReader::SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Chan3, bool Chan4)
 {
 	TxData[0] = 0xaa;		//preamble code
 	TxData[1] = 0x01;		//command
@@ -778,7 +750,7 @@ void  CTrimReader::SetIntTime(float int_t)
 {
 	unsigned char* hData = (unsigned char*)&int_t;	//
 
-	BYTE TrimBuf[8];
+	uint8_t TrimBuf[8];
 
 	TrimBuf[0] = hData[0];	//buffer
 	TrimBuf[1] = hData[1];
@@ -804,7 +776,7 @@ void  CTrimReader::SetIntTime(float int_t)
 	TxData[10] = 0x17;		//back code
 }
 
-void CTrimReader::SelSensor(BYTE i)
+void CTrimReader::SelSensor(uint8_t i)
 {
 	// TODO: Add your control notification handler code here
 
@@ -837,7 +809,7 @@ int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
 	int flag;
 	int FrameSize = 0;
 
-	BYTE type = RxData[3];
+	uint8_t type = RxData[3];
 
 	switch (type)
 	{
@@ -864,8 +836,8 @@ int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
 	int pixel_offset = 5; // instead of 8
 
 	for (int i = 0; i < ncol; i++) {
-		BYTE low = RxData[pixel_offset + i * 2];
-		BYTE high = RxData[pixel_offset + i * 2 + 1];
+		uint8_t low = RxData[pixel_offset + i * 2];
+		uint8_t high = RxData[pixel_offset + i * 2 + 1];
 		result = ADCCorrectioni(i, high, low, ncol, chan_num, gain_mode, &flag);
 		adc_data[rn][i] = result;
 	}
@@ -889,9 +861,9 @@ int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
 	return FrameSize;
 }
 
-BYTE CTrimReader::TrimBuff2Byte()
+uint8_t CTrimReader::TrimBuff2Byte()
 {
-	BYTE r;
+	uint8_t r;
 
 	r = trim_buff[tbuff_rptr];
 	tbuff_rptr++;
@@ -955,13 +927,13 @@ void CTrimReader::RestoreFromTrimBuff()
 }
 
 
-extern BOOL ee_continue;
+extern bool ee_continue;
 
 void CTrimReader::OnEEPROMRead()
 {
 	// EEPROM data, check parity here too.
 
-	BYTE eeprom_parity = 0;
+	uint8_t eeprom_parity = 0;
 	int index = RxData[7];		// For command type 2d EEPROM read command
 	int npages = RxData[6];
 	bool parity_ok = true;
@@ -997,7 +969,7 @@ void CTrimReader::EEPROMRead()
 	TxData[1] = 0x04;					//command
 	TxData[2] = 0x02;					//data length
 	TxData[3] = 0x2d;					//data type
-	TxData[4] = (BYTE)0x0;			//	real data
+	TxData[4] = (uint8_t)0x0;			//	real data
 	//	TxData[5] = 0x00;
 	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
 	if (TxData[5] == 0x17)
@@ -1063,7 +1035,7 @@ int  CTrimReader::Add2TrimBuff(int i, int val)
 	return k + 2;
 }
 
-int  CTrimReader::Add2TrimBuff(int i, BYTE val)
+int  CTrimReader::Add2TrimBuff(int i, uint8_t val)
 {
 	int k = Node[i].tbuff_size;
 	if (k >= MAX_TRIMBUFF) return -1;
@@ -1083,17 +1055,17 @@ int  CTrimReader::WriteTrimBuff(int k)
 
 	int sn = _tstoi(g_ChipID);
 
-	BYTE b0 = (BYTE)sn;
-	BYTE b1 = sn >> 8;
+	uint8_t b0 = (uint8_t)sn;
+	uint8_t b1 = sn >> 8;
 
-	Add2TrimBuff(k, (BYTE)b0);
-	Add2TrimBuff(k, (BYTE)b1);
-	Add2TrimBuff(k, (BYTE)('O'));							// O for ONT, Oxford Nanopore Tech
+	Add2TrimBuff(k, (uint8_t)b0);
+	Add2TrimBuff(k, (uint8_t)b1);
+	Add2TrimBuff(k, (uint8_t)('O'));							// O for ONT, Oxford Nanopore Tech
 #else
 
-	Add2TrimBuff(k, (BYTE)Node[k].name[0]);
-	Add2TrimBuff(k, (BYTE)Node[k].name[1]);
-	Add2TrimBuff(k, (BYTE)Node[k].name[2]);
+	Add2TrimBuff(k, (uint8_t)Node[k].name[0]);
+	Add2TrimBuff(k, (uint8_t)Node[k].name[1]);
+	Add2TrimBuff(k, (uint8_t)Node[k].name[2]);
 
 #endif
 
@@ -1108,11 +1080,11 @@ int  CTrimReader::WriteTrimBuff(int k)
 		Add2TrimBuff(k, (int)(Node[k].fpni[1][i]));
 	}
 
-	Add2TrimBuff(k, (BYTE)(Node[k].rampgen));
-	Add2TrimBuff(k, (BYTE)(Node[k].range));
-	Add2TrimBuff(k, (BYTE)(Node[k].auto_v20[0]));
-	Add2TrimBuff(k, (BYTE)(Node[k].auto_v20[1]));
-	Add2TrimBuff(k, (BYTE)(Node[k].auto_v15));
+	Add2TrimBuff(k, (uint8_t)(Node[k].rampgen));
+	Add2TrimBuff(k, (uint8_t)(Node[k].range));
+	Add2TrimBuff(k, (uint8_t)(Node[k].auto_v20[0]));
+	Add2TrimBuff(k, (uint8_t)(Node[k].auto_v20[1]));
+	Add2TrimBuff(k, (uint8_t)(Node[k].auto_v15));
 
 	Add2TrimBuff(k, (int)round(29.5 * 128));				// tempcal1
 
@@ -1141,9 +1113,9 @@ int CTrimReader::TrimBuff2Int(int i)
 	return (int)r;
 }
 
-BYTE CTrimReader::TrimBuff2Byte(int i)
+uint8_t CTrimReader::TrimBuff2Byte(int i)
 {
-	BYTE r;
+	uint8_t r;
 
 	r = Node[i].trim_buff[Node[i].tbuff_rptr];
 	Node[i].tbuff_rptr++;
@@ -1156,8 +1128,8 @@ void  CTrimReader::RestoreTrimBuff(int k)
 	int i, j;
 	Node[k].tbuff_rptr = 0;				// initialize read pointer
 
-	BYTE b0, b1, b2;
-	//	CString cid;
+	uint8_t b0, b1, b2;
+	//	std::string cid;
 
 	b0 = TrimBuff2Byte(k);
 	b1 = TrimBuff2Byte(k);
@@ -1192,7 +1164,7 @@ void  CTrimReader::RestoreTrimBuff(int k)
 }
 
 //#ifdef CALIB_PROGRAM
-//extern BYTE EepromBuff[][EPKT_SZ + 1];		// +1 for parity
+//extern uint8_t EepromBuff[][EPKT_SZ + 1];		// +1 for parity
 //#endif
 
 void  CTrimReader::CopyEepromBuff(int k, int index_start)

@@ -1,12 +1,13 @@
-#include "stdafx.h"
 #include <hidapi/hidapi.h>
-#include <stdio.h>
-#include <string.h>
+#include <cstdio>
+#include <cstring>
+#include <thread>
+#include <chrono>
 #include "HidMgr.h"
 
-int g_DeviceDetected = 0;
+bool g_DeviceDetected = false;
 int Continue_Flag = 0;
-int ee_continue = 0;
+bool ee_continue = false;
 int chan_num = 0;
 
 // Vendor and Product IDs
@@ -15,31 +16,31 @@ int chan_num = 0;
 
 #define TxNum 64
 #define RxNum 64
-#define HIDREPORTNUM 65 // 1 byte report ID + 64 bytes data
+//#define HIDREPORTNUM 65 // 1 byte report ID + 64 bytes data
 
 // Global device handle
-hid_device* DeviceHandle = NULL;
+hid_device* DeviceHandle = nullptr;
 
 // Buffers for communication (1st byte is report ID, usually 0)
-BYTE RxData[RxNum];
-BYTE TxData[TxNum];
+uint8_t RxData[RxNum];
+uint8_t TxData[TxNum];
 
 // Find and open the HID device
 bool FindTheHID()
 {
     if (hid_init() != 0) {
-        printf("hidapi init failed\n");
+        std::printf("hidapi init failed\n");
         return false;
     }
 
-    DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, NULL);
+    DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
     if (DeviceHandle) {
-        printf("Device found!\n");
+        std::printf("Device found!\n");
         hid_set_nonblocking(DeviceHandle, 1); // 1 = non-blocking
         return true;
     }
     else {
-        printf("Device not found.\n");
+        std::printf("Device not found.\n");
         return false;
     }
 }
@@ -49,7 +50,7 @@ void CloseHandles()
 {
     if (DeviceHandle) {
         hid_close(DeviceHandle);
-        DeviceHandle = NULL;
+        DeviceHandle = nullptr;
     }
     hid_exit();
 }
@@ -58,14 +59,11 @@ bool WriteHIDOutputReport(int length)
 {
     unsigned char OutputReport[HIDREPORTNUM] = { 0 };
     OutputReport[0] = 0; // Report ID
-    memcpy(&OutputReport[1], TxData, TxNum);
-    //printf("OutputReport: ");
-    //for (int i = 0; i < length; ++i) printf("%02X ", OutputReport[i]);
-    //printf("\n");
+    std::memcpy(&OutputReport[1], TxData, TxNum);
     int res = hid_write(DeviceHandle, OutputReport, length);
-    Sleep(10);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (res < 0) {
-        //printf("Write failed: %ls\n", hid_error(DeviceHandle));
+        // std::printf("Write failed: %ls\n", hid_error(DeviceHandle));
         return false;
     }
     return true;
@@ -76,14 +74,11 @@ bool ReadHIDInputReport(int length)
     unsigned char InputReport[HIDREPORTNUM] = { 0 };
     int res = hid_read(DeviceHandle, InputReport, length);
     if (res > 0) {
-        memcpy(RxData, &InputReport[1], RxNum);
-        //printf("RxData: ");
-        //for (int i = 0; i < RxNum; ++i) printf("%02X ", RxData[i]);
-        //printf("\n");
+        std::memcpy(RxData, &InputReport[1], RxNum);
         return true;
     }
     if (res < 0) {
-        printf("Read failed: %ls\n", hid_error(DeviceHandle));
+        std::printf("Read failed: %ls\n", hid_error(DeviceHandle));
         return false;
     }
     return false;

@@ -1,275 +1,224 @@
 // Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
-#include "stdafx.h"
-
-
 #include "InterfaceObj.h"
 #include "HidMgr.h"
+#include <cstring>
+#include <string>
+#include <thread>
+#include <chrono>
+#include <filesystem>
 
-extern BYTE TxData[TxNum];		// the buffer of sent data to HID
-extern BYTE RxData[RxNum];		// the buffer of received data from HID
+namespace fs = std::filesystem;
 
-extern BOOL g_DeviceDetected;
-extern bool	MyDeviceDetected;	// redundant, maybe keep only one?
+extern uint8_t TxData[TxNum];
+extern uint8_t RxData[RxNum];
 
-int gain_mode = 0;					// todo: move to member variable
-float int_time = 1;				// integration time
-int frame_size = 0;				// 0: 12x12 frame; 1: 24x24 frame
+extern bool g_DeviceDetected;
+extern bool MyDeviceDetected; // redundant, maybe keep only one?
+
+int gain_mode = 0;
+float int_time = 1;
+int frame_size = 0;
 
 extern int Continue_Flag;
-extern BOOL ee_continue;
+extern bool ee_continue;
 
-TCHAR g_CurrentDirectory[MAX_PATH];
+CInterfaceObject theInterfaceObject;
 
 CInterfaceObject::CInterfaceObject()
 {
-	cur_chan = 1;
+    cur_chan = 1;
 }
 
-CString CInterfaceObject::GetChipName()
+std::string CInterfaceObject::GetChipName()
 {
-	return m_TrimReader.Node[0].name;
+    return m_TrimReader.Node[0].name;
 }
-
-/////////////////////////////////////////////////////////////////////////////
-// Below are interfaces to set ULS24 internal parameters - called trim data. 
-/////////////////////////////////////////////////////////////////////////////
 
 void CInterfaceObject::ResetTrim()
 {
-	SelSensor(1);
-	SetRampgen((BYTE)m_TrimReader.Node[0].rampgen);
-	SetRangeTrim(0x0f);
-	SetV20(m_TrimReader.Node[0].auto_v20[1]);
-	SetV15(m_TrimReader.Node[0].auto_v15);
-	SetGainMode(1);			// Low gain
-	SetTXbin(0x8);
-	SetIntTime(1);			// 1 ms
+    SelSensor(1);
+    SetRampgen((uint8_t)m_TrimReader.Node[0].rampgen);
+    SetRangeTrim(0x0f);
+    SetV20(m_TrimReader.Node[0].auto_v20[1]);
+    SetV15(m_TrimReader.Node[0].auto_v15);
+    SetGainMode(1);
+    SetTXbin(0x8);
+    SetIntTime(1);
 
-	SelSensor(2);
-	SetRampgen((BYTE)m_TrimReader.Node[1].rampgen);
-	SetRangeTrim(0x0f);
-	SetV20(m_TrimReader.Node[1].auto_v20[1]);
-	SetV15(m_TrimReader.Node[1].auto_v15);
-	SetGainMode(1);			// Low gain
-	SetTXbin(0x8);
-	SetIntTime(1);			// 1 ms
+    SelSensor(2);
+    SetRampgen((uint8_t)m_TrimReader.Node[1].rampgen);
+    SetRangeTrim(0x0f);
+    SetV20(m_TrimReader.Node[1].auto_v20[1]);
+    SetV15(m_TrimReader.Node[1].auto_v15);
+    SetGainMode(1);
+    SetTXbin(0x8);
+    SetIntTime(1);
 
-	SelSensor(3);
-	SetRampgen((BYTE)m_TrimReader.Node[2].rampgen);
-	SetRangeTrim(0x0f);
-	SetV20(m_TrimReader.Node[2].auto_v20[1]);
-	SetV15(m_TrimReader.Node[2].auto_v15);
-	SetGainMode(1);			// Low gain
-	SetTXbin(0x8);
-	SetIntTime(1);			// 1 ms
+    SelSensor(3);
+    SetRampgen((uint8_t)m_TrimReader.Node[2].rampgen);
+    SetRangeTrim(0x0f);
+    SetV20(m_TrimReader.Node[2].auto_v20[1]);
+    SetV15(m_TrimReader.Node[2].auto_v15);
+    SetGainMode(1);
+    SetTXbin(0x8);
+    SetIntTime(1);
 
-	SelSensor(4);
-	SetRampgen((BYTE)m_TrimReader.Node[3].rampgen);
-	SetRangeTrim(0x0f);
-	SetV20(m_TrimReader.Node[3].auto_v20[1]);
-	SetV15(m_TrimReader.Node[3].auto_v15);
-	SetGainMode(1);			// Low gain
-	SetTXbin(0x8);
-	SetIntTime(1);			// 1 ms
+    SelSensor(4);
+    SetRampgen((uint8_t)m_TrimReader.Node[3].rampgen);
+    SetRangeTrim(0x0f);
+    SetV20(m_TrimReader.Node[3].auto_v20[1]);
+    SetV15(m_TrimReader.Node[3].auto_v15);
+    SetGainMode(1);
+    SetTXbin(0x8);
+    SetIntTime(1);
 
-	SetLEDConfig(1, 1, 1, 1, 1);			// Set Multi LED mode, first enable all channels, then disable all channels.
-	Sleep(100);								// Why do we need to do this
-	SetLEDConfig(1, 0, 0, 0, 0);
+    SetLEDConfig(true, true, true, true, true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    SetLEDConfig(true, false, false, false, false);
 }
 
-void CInterfaceObject::SetV15(BYTE v15)
+void CInterfaceObject::SetV15(uint8_t v15)
 {
-	m_TrimReader.SetV15(v15);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetV15(v15);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
 
-void CInterfaceObject::SetV20(BYTE v20)
+void CInterfaceObject::SetV20(uint8_t v20)
 {
-	m_TrimReader.SetV20(v20);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetV20(v20);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
-
 
 void CInterfaceObject::SetGainMode(int gain)
 {
-	m_TrimReader.SetGainMode(gain);
+    m_TrimReader.SetGainMode(gain);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
-
-	gain_mode = gain;
-
-	// When gain mode change, V20 needs to change also
-	if (!gain) SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[1]); // auto_v20_hg);
-	else SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[0]); // auto_v20_lg);
+    gain_mode = gain;
+    if (!gain)
+        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[1]);
+    else
+        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[0]);
 }
 
-void  CInterfaceObject::SetRangeTrim(BYTE range)
+void CInterfaceObject::SetRangeTrim(uint8_t range)
 {
-	m_TrimReader.SetRangeTrim(range);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetRangeTrim(range);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
 
-void  CInterfaceObject::SetRampgen(BYTE rampgen)
+void CInterfaceObject::SetRampgen(uint8_t rampgen)
 {
-	m_TrimReader.SetRampgen(rampgen);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetRampgen(rampgen);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
 
-void  CInterfaceObject::SetTXbin(BYTE txbin)
+void CInterfaceObject::SetTXbin(uint8_t txbin)
 {
-	m_TrimReader.SetTXbin(txbin);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetTXbin(txbin);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
 
-///////////////////////////////////////////////////////
-// Below are routines to adjust integration time
-////////////////////////////////////////////////////////
-
-void  CInterfaceObject::SetIntTime(float it)
+void CInterfaceObject::SetIntTime(float it)
 {
-	m_TrimReader.SetIntTime(it);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
-
-	int_time = it;
+    m_TrimReader.SetIntTime(it);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
+    int_time = it;
 }
 
-void  CInterfaceObject::SelSensor(BYTE chan)
+void CInterfaceObject::SelSensor(uint8_t chan)
 {
-	m_TrimReader.SelSensor(chan);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
-
-	cur_chan = (int)chan;
+    m_TrimReader.SelSensor(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
+    cur_chan = static_cast<int>(chan);
 }
 
-void  CInterfaceObject::SetLEDConfig(BOOL IndvEn, BOOL Chan1, BOOL Chan2, BOOL Chan3, BOOL Chan4)
+void CInterfaceObject::SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Chan3, bool Chan4)
 {
-	m_TrimReader.SetLEDConfig(IndvEn, Chan1, Chan2, Chan3, Chan4);
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-	ReadHIDInputReport();
+    m_TrimReader.SetLEDConfig(IndvEn, Chan1, Chan2, Chan3, Chan4);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    ReadHIDInputReport();
 }
 
 void CInterfaceObject::ProcessRowData()
 {
-	frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
+    frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
 }
 
-int  CInterfaceObject::CaptureFrame12(BYTE chan)
+int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-	// Issue capture command
-
-	m_TrimReader.Capture12(chan);
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-
-	// Read and process result
-	Continue_Flag = true;
-
-	while (Continue_Flag) {		// Process data row by row
-		ReadHIDInputReport();
-		ProcessRowData();
-		//		((CTestBBDlg*)pDlg)->DrawPattern();
-		memset(RxData, 0, sizeof(RxData));
-	}
-
-	// Application developer can add code here to further process 
-	// the data, that is save in "adc_result[24][24]
-
-	return 0;
+    m_TrimReader.Capture12(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    Continue_Flag = true;
+    while (Continue_Flag) {
+        ReadHIDInputReport();
+        ProcessRowData();
+        std::memset(RxData, 0, sizeof(RxData));
+    }
+    return 0;
 }
 
-int  CInterfaceObject::CaptureFrame24()
+int CInterfaceObject::CaptureFrame24()
 {
-	// Issue capture command
-	m_TrimReader.Capture24();
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-
-	// Read and process result
-	Continue_Flag = true;
-
-	while (Continue_Flag) {		// Process data row by row
-		ReadHIDInputReport();
-		ProcessRowData();
-		//		((CTestBBDlg*)pDlg)->DrawPattern();
-		memset(RxData, 0, sizeof(RxData));
-	}
-
-	// Application developer can add code here to further process 
-	// the data, that is save in "adc_result[24][24]
-
-	return 0;
+    m_TrimReader.Capture24();
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    Continue_Flag = true;
+    while (Continue_Flag) {
+        ReadHIDInputReport();
+        ProcessRowData();
+        std::memset(RxData, 0, sizeof(RxData));
+    }
+    return 0;
 }
 
-int  CInterfaceObject::LoadTrimFile()
+int CInterfaceObject::LoadTrimFile()
 {
-	GetCurrentDirectory(MAX_PATH, g_CurrentDirectory);
-
-	CString path;
-	path = g_CurrentDirectory;
-	path += "\\Trim\\trim.dat";
-
-	LPTSTR lpszData = path.GetBuffer(path.GetLength());
-	int e = m_TrimReader.Load((TCHAR*)lpszData);
-	path.ReleaseBuffer(0);
-
-	if (e) {
-		m_TrimReader.Parse();
-	}
-
-	return e;
+    // Use C++17 filesystem for cross-platform current directory
+    std::string path = fs::current_path().string();
+    path += "/Trim/trim.dat";
+    int e = m_TrimReader.Load(path);
+    if (e == 0) {
+        m_TrimReader.Parse();
+    }
+    return e;
 }
 
-void CInterfaceObject::ReadTrimData()	// From flash
+void CInterfaceObject::ReadTrimData()
 {
-
-	m_TrimReader.EEPROMRead();
-
-	WriteHIDOutputReport();		// 
-	memset(TxData, 0, sizeof(TxData));
-
-	while (ee_continue) {
-		ReadHIDInputReport();
-		m_TrimReader.OnEEPROMRead();
-		memset(RxData, 0, sizeof(RxData));
-	}
-
-	m_TrimReader.ReadTrimData();
-
-	ResetTrim();
+    m_TrimReader.EEPROMRead();
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+    while (ee_continue) {
+        ReadHIDInputReport();
+        m_TrimReader.OnEEPROMRead();
+        std::memset(RxData, 0, sizeof(RxData));
+    }
+    m_TrimReader.ReadTrimData();
+    ResetTrim();
 }
 
 int CInterfaceObject::IsDeviceDetected()
 {
-	return g_DeviceDetected;
+    return g_DeviceDetected;
 }
-
-
-
-
