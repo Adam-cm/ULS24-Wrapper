@@ -1,8 +1,14 @@
 import ctypes
 import numpy as np
+import os
 
-# Load the DLL (adjust the path as needed)
-ULS24 = ctypes.CDLL(r'C:\Users\Adam1\source\repos\TestCI\x64\Debug\TestCl.dll')
+# Load the .so shared library (update the path as needed)
+# Example: if your .so is in /home/pi/ULS24-Wrapper/TestCl/libTestCl.so
+so_path = '/home/pi/ULS24-Wrapper/TestCl/ULSLIB.so'
+if not os.path.exists(so_path):
+    raise FileNotFoundError(f"Could not find shared library at {so_path}")
+
+ULS24 = ctypes.CDLL(so_path)
 
 # Set argument types if needed
 ULS24.selchan.argtypes = [ctypes.c_int]
@@ -25,7 +31,7 @@ print("Calling get")
 ULS24.get(1)
 print("Done")
 
-# After calling dll.get(chan), retrieve the frame data
+# After calling get(chan), retrieve the frame data
 FrameArrayType = ctypes.c_int * (12 * 12)
 frame_buffer = FrameArrayType()
 ULS24.get_frame12(frame_buffer)
