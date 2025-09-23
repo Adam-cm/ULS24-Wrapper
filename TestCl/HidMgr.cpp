@@ -83,6 +83,7 @@ bool ReadHIDInputReport(int length)
         return false;
     }
     std::printf("No data available from device\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     return false;
 }
 
