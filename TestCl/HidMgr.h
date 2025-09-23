@@ -11,6 +11,7 @@ extern "C" {
 #include <setupapi.h>
 #include <dbt.h>
 }
+bool DeviceNameMatch(LPARAM lParam);
 #endif
 
 #define MAX_LOADSTRING 256
@@ -27,7 +28,6 @@ extern int Continue_Flag;
 #define ReadCmd     0x04        // Read command
 
 // Only declare these if you actually use them on Linux, otherwise guard or remove
-bool DeviceNameMatch(LPARAM lParam);
 bool FindTheHID();
 void CloseHandles();
 void DisplayInputReport();

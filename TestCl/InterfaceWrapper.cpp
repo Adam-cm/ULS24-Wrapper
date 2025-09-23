@@ -4,17 +4,23 @@
 
 extern CInterfaceObject theInterfaceObject;
 
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+
 extern "C" {
 
-    __declspec(dllexport) void selchan(int chan) {
+    EXPORT void selchan(int chan) {
         theInterfaceObject.SelSensor(chan);
     }
 
-    __declspec(dllexport) void get(int chan) {
+    EXPORT void get(int chan) {
         theInterfaceObject.CaptureFrame12(chan);
     }
-    
-    __declspec(dllexport) void get_frame12(int* outbuf) {
+
+    EXPORT void get_frame12(int* outbuf) {
         for (int i = 0; i < 12; ++i) {
             for (int j = 0; j < 12; ++j) {
                 outbuf[i * 12 + j] = theInterfaceObject.frame_data[i][j];
@@ -22,15 +28,16 @@ extern "C" {
         }
     }
 
-    __declspec(dllexport) void setinttime(float itime) {
+    EXPORT void setinttime(float itime) {
         theInterfaceObject.SetIntTime(itime);
     }
 
-    __declspec(dllexport) void setgain(int gain) {
+    EXPORT void setgain(int gain) {
         theInterfaceObject.SetGainMode(gain);
     }
 
-    __declspec(dllexport) void reset() {
+    EXPORT void reset() {
         FindTheHID();
     }
+
 }
