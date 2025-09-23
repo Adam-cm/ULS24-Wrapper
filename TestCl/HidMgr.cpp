@@ -74,6 +74,7 @@ bool ReadHIDInputReport(int length)
     unsigned char InputReport[HIDREPORTNUM] = { 0 };
     int res = hid_read(DeviceHandle, InputReport, length);
     if (res > 0) {
+        std::printf("Read %d bytes from device\n", res);
         std::memcpy(RxData, &InputReport[1], RxNum);
         return true;
     }
@@ -81,6 +82,7 @@ bool ReadHIDInputReport(int length)
         std::printf("Read failed: %ls\n", hid_error(DeviceHandle));
         return false;
     }
+    std::printf("No data available from device\n");
     return false;
 }
 
