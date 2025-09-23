@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 
 // Helper: trim left
 static void trimLeft(std::string& s, const std::string& delimiters) {
@@ -1104,7 +1105,7 @@ int  CTrimReader::WriteTrimBuff(int k)
 
 int CTrimReader::TrimBuff2Int(int i)
 {
-	_int16 r;		// this is necessary to get negative value correctly
+	int16_t r;		// this is necessary to get negative value correctly
 	int k = Node[i].tbuff_rptr;
 
 	r = (Node[i].trim_buff[k] << 8) | (Node[i].trim_buff[k + 1]);
