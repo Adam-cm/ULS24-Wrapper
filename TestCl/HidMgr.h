@@ -3,8 +3,10 @@
 
 #pragma once
 
+#ifdef _WIN32
 #include <wtypes.h>
 #include <initguid.h>
+#endif
 
 #define MAX_LOADSTRING 256
 

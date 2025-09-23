@@ -47,7 +47,7 @@
     <ClInclude Include="InterfaceObj.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\..\Downloads\hidapi.h">
+    <ClInclude Include="hidapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

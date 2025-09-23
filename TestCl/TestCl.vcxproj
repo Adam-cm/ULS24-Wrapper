@@ -159,7 +159,7 @@
     <None Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\..\Downloads\hidapi.h" />
+    <ClInclude Include="hidapi.h" />
     <ClInclude Include="HidMgr.h" />
     <ClInclude Include="hidpi.h" />
     <ClInclude Include="hidsdi.h" />
