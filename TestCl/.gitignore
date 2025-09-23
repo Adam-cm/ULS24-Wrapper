@@ -2,6 +2,6 @@
 *.pchast
 /x64/
 /Debug/
-/.vs/
+.vs/
 *.log
 *.lib
