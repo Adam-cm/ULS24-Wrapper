@@ -3,6 +3,7 @@ import numpy as np
 import os
 import time
 import atexit
+import subprocess
 
 # Load the shared library
 so_path = '/home/adam1/ULS24-Wrapper/TestCl/ULSLIB.so'
@@ -21,6 +22,20 @@ ULS24.get_frame12.argtypes = [ctypes.POINTER(ctypes.c_int)]
 ULS24.check_data_flow.argtypes = []
 ULS24.check_data_flow.restype = ctypes.c_int
 ULS24.cancel_capture.argtypes = []
+ULS24.optimize_for_pi.argtypes = []
+
+# Try to optimize the system
+try:
+    # Ensure no other USB devices are using bandwidth
+    subprocess.run("echo 'minimize USB usage' | wall", shell=True)
+    
+    # Try to optimize the process
+    ULS24.optimize_for_pi()
+    
+    # Set this process to high priority
+    os.nice(-20)
+except Exception as e:
+    print(f"Could not apply all optimizations: {e}")
 
 # Ensure we always clean up
 def cleanup():

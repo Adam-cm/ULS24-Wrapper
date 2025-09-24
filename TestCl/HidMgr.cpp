@@ -36,22 +36,38 @@ static std::condition_variable hid_queue_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
 
-// Dedicated read thread function - updated for higher priority
+// Dedicated read thread function optimized for Raspberry Pi
 static void HidReadThreadFunc() {
-    // Optional: Set thread to higher priority if possible
-#ifndef _WIN32  // Linux-specific
-    {
-        pthread_t this_thread = pthread_self();
-        struct sched_param params;
-        params.sched_priority = sched_get_priority_max(SCHED_FIFO);
-        pthread_setschedparam(this_thread, SCHED_FIFO, &params);
+    // Set highest possible priority for this thread
+#ifndef _WIN32
+// Include needed headers
+#include <pthread.h>
+#include <sched.h>
+
+// Try to set real-time priority
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_RR);  // Round-robin scheduler is better on Pi
+    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+
+    // If we're root, we can also set CPU affinity to dedicate a core
+#include <sys/syscall.h>
+#include <unistd.h>
+
+// Check if we're running as root
+    if (geteuid() == 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(3, &cpuset);  // Use core 3 (keep cores 0-2 for system)
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
     }
 #endif
 
+    // Direct, aggressive read loop
     while (hid_read_thread_running) {
         unsigned char InputReport[HIDREPORTNUM] = { 0 };
-        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 10); // Short timeout
 
+        // Use smallest possible timeout for faster response
+        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 1);
         if (res > 0) {
             std::vector<uint8_t> report(InputReport + 1, InputReport + 1 + RxNum);
             {
@@ -60,13 +76,19 @@ static void HidReadThreadFunc() {
             }
             hid_queue_cv.notify_one();
         }
-        // No sleep - read as fast as possible
+
+        // On Pi, we need a tiny sleep to avoid overwhelming the CPU
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
 }
 
-// Start the read thread
+// When starting the thread
 void StartHidReadThread() {
     if (!hid_read_thread_running) {
+        // On Pi, increase the non-blocking poll rate
+        hid_set_nonblocking(DeviceHandle, 1);
+
+        // Start the read thread
         hid_read_thread_running = true;
         hid_read_thread = std::thread(HidReadThreadFunc);
     }

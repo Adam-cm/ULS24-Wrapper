@@ -52,6 +52,23 @@ extern "C" {
         return count; // Return how many reports were in the queue
     }
 
+    EXPORT void optimize_for_pi() {
+#ifdef __linux__
+        // Set process priority
+        setpriority(PRIO_PROCESS, 0, -20);
+
+        // If running as root, we can lock pages in memory
+        if (geteuid() == 0) {
+            mlockall(MCL_CURRENT | MCL_FUTURE);
+        }
+
+        // Disable CPU scaling to maintain consistent performance
+        system("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1");
+#endif
+
+        return;
+    }
+
     EXPORT void cancel_capture() {
         Continue_Flag = false;
     }
