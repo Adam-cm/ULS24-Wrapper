@@ -166,60 +166,83 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    // Explicitly target missing rows (2,4,6,8,10)
-    const int MAX_PASSES = 5;  // Increase passes to ensure we get all rows
+    // Define which rows we're explicitly looking for
     bool rows_received[12] = { false };
     int total_rows = 0;
 
-    // Aggressively clear buffer before starting
-    printf("Clearing buffer before capture...\n");
-    int cleared = 0;
-    while (ReadHIDInputReportFromQueue()) {
-        cleared++;
+    printf("Starting full capture for channel %d\n", chan);
+
+    // Try to get all rows in first pass
+    m_TrimReader.Capture12(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
+
+    Continue_Flag = true;
+    int attempts = 0;
+    int max_attempts = 50;
+
+    // Drain buffer first
+    while (ReadHIDInputReportFromQueue()) { /* Just drain */ }
+
+    // First pass - get whatever rows come naturally
+    while (Continue_Flag && attempts < max_attempts && total_rows < 12) {
+        if (ReadHIDInputReportFromQueue()) {
+            uint8_t row = RxData[4]; // Row index in the data packet
+            if (row < 12 && !rows_received[row]) {
+                ProcessRowData();
+                rows_received[row] = true;
+                total_rows++;
+                printf("Got row %d (%d/12 rows)\n", row, total_rows);
+                attempts = 0; // Reset timeout counter on successful read
+            }
+        }
+        else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            attempts++;
+        }
     }
-    printf("Cleared %d reports from buffer\n", cleared);
 
-    for (int pass = 1; pass <= MAX_PASSES; pass++) {
-        printf("Capture pass %d/%d\n", pass, MAX_PASSES);
+    // Now specifically target each missing row with individual requests
+    for (int row = 0; row < 12; row++) {
+        if (!rows_received[row]) {
+            printf("Specifically requesting row %d...\n", row);
 
-        // Send capture command each time
-        m_TrimReader.Capture12(chan);
-        WriteHIDOutputReport();
-        std::memset(TxData, 0, sizeof(TxData));
+            // Request a specific row (modify as needed based on your protocol)
+            m_TrimReader.SelSensor(chan);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-        Continue_Flag = true;
-        int timeout_count = 0;
-        const int max_timeout = 200; // More attempts with shorter sleeps
+            // Add specific row request command - you'll need to implement this
+            TxData[0] = 0xaa;     // preamble code
+            TxData[1] = 0x01;     // command
+            TxData[2] = 0x03;     // data length
+            TxData[3] = 0x30;     // data type for row request (MODIFY THIS)
+            TxData[4] = row;      // requested row
+            TxData[5] = 0x00;
+            TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];  // checksum
+            if (TxData[6] == 0x17)
+                TxData[6] = 0x18;
 
-        // Try to get as many rows as possible in this pass
-        while (Continue_Flag && timeout_count < max_timeout && total_rows < 12) {
-            if (ReadHIDInputReportFromQueue()) {
-                uint8_t row = RxData[4];
-                if (row < 12 && !rows_received[row]) {
-                    ProcessRowData();
-                    rows_received[row] = true;
-                    total_rows++;
-                    printf("Pass %d: Got row %d (%d/12 total rows)\n", pass, row, total_rows);
-                    timeout_count = 0; // Reset timeout counter on successful read
+            WriteHIDOutputReport();
+            std::memset(TxData, 0, sizeof(TxData));
+
+            // Try to get this specific row
+            attempts = 0;
+            bool got_row = false;
+            while (attempts < 20 && !got_row) {
+                if (ReadHIDInputReportFromQueue()) {
+                    if (RxData[4] == row) {
+                        ProcessRowData();
+                        rows_received[row] = true;
+                        total_rows++;
+                        got_row = true;
+                        printf("Successfully got row %d (%d/12 total)\n", row, total_rows);
+                    }
+                }
+                else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    attempts++;
                 }
             }
-            else {
-                // Much shorter sleep to process buffer more frequently
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                timeout_count++;
-            }
-
-            // If we got all rows, exit early
-            if (total_rows == 12) break;
-        }
-
-        // Stop current capture
-        Continue_Flag = false;
-
-        // On odd-numbered passes, specifically request missing even-numbered rows
-        if (pass % 2 == 1 && total_rows < 12) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            printf("Targeting missing even rows...\n");
         }
     }
 
@@ -231,7 +254,11 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         }
         printf("\n");
     }
+    else {
+        printf("Successfully captured all 12 rows!\n");
+    }
 
+    Continue_Flag = false;
     return (total_rows > 0) ? 0 : 1;
 }
 
