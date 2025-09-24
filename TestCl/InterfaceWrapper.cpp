@@ -4,6 +4,13 @@
 #include <cstdio>
 #include <vector>
 
+// Linux-specific headers
+#ifdef __linux__
+#include <unistd.h>
+#include <sys/resource.h>
+#include <sys/mman.h>
+#endif
+
 extern CInterfaceObject theInterfaceObject;
 extern uint8_t RxData[RxNum];
 
@@ -53,19 +60,19 @@ extern "C" {
     }
 
     EXPORT void optimize_for_pi() {
-#ifdef __linux__
+    #ifdef __linux__
         // Set process priority
-        setpriority(PRIO_PROCESS, 0, -20);
-
+        nice(-20);  // Use nice() instead of setpriority()
+        
         // If running as root, we can lock pages in memory
         if (geteuid() == 0) {
             mlockall(MCL_CURRENT | MCL_FUTURE);
         }
-
+        
         // Disable CPU scaling to maintain consistent performance
         system("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1");
-#endif
-
+    #endif
+        
         return;
     }
 

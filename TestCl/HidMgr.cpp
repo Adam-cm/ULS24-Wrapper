@@ -7,6 +7,16 @@
 #include <condition_variable>
 #include <atomic>
 #include <vector>
+
+// Linux-specific headers - must be included outside of functions
+#ifndef _WIN32
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
+#include <sys/resource.h>
+#include <sys/mman.h>
+#endif
+
 #include "HidMgr.h"
 
 bool g_DeviceDetected = false;
@@ -20,7 +30,7 @@ int chan_num = 0;
 
 #define TxNum 64
 #define RxNum 64
-#define HIDREPORTNUM 65 // 1 byte report ID + 64 bytes data
+// HIDREPORTNUM is already defined in HidMgr.h as (64+1)
 
 // Global device handle
 hid_device* DeviceHandle = nullptr;
@@ -40,26 +50,21 @@ static std::thread hid_read_thread;
 static void HidReadThreadFunc() {
     // Set highest possible priority for this thread
 #ifndef _WIN32
-// Include needed headers
-#include <pthread.h>
-#include <sched.h>
-
-// Try to set real-time priority
+    // Try to set real-time priority
     struct sched_param param;
     param.sched_priority = sched_get_priority_max(SCHED_RR);  // Round-robin scheduler is better on Pi
     pthread_setschedparam(pthread_self(), SCHED_RR, &param);
-
-    // If we're root, we can also set CPU affinity to dedicate a core
-#include <sys/syscall.h>
-#include <unistd.h>
-
-// Check if we're running as root
+    
+    // If we're root, we can also set CPU affinity
+    #if defined(__linux__)
+    // Check if we're running as root
     if (geteuid() == 0) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(3, &cpuset);  // Use core 3 (keep cores 0-2 for system)
         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
     }
+    #endif
 #endif
 
     // Direct, aggressive read loop
