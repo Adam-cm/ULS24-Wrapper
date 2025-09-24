@@ -200,7 +200,6 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 
         // Now read as many rows as possible in a tight loop
         Continue_Flag = true;
-        int attempt = 0;
         int timeout_ms = 1000; // 1 second timeout per attempt
         auto start_time = std::chrono::steady_clock::now();
 
@@ -239,29 +238,22 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         }
     }
 
-    // If we still have missing rows after all attempts, fill with last known good values
+    // Final report of any missing rows without interpolation
     if (total_rows < 12) {
-        printf("Warning: Using interpolation for %d missing rows\n", 12 - total_rows);
-
-        // Find a good row to use as template
-        int good_row = -1;
+        printf("Warning: Only captured %d/12 rows. Missing rows:", total_rows);
         for (int i = 0; i < 12; i++) {
-            if (rows_received[i]) {
-                good_row = i;
-                break;
-            }
-        }
-
-        // Fill in missing rows with data from good row
-        if (good_row >= 0) {
-            for (int i = 0; i < 12; i++) {
-                if (!rows_received[i]) {
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = frame_data[good_row][j];
-                    }
+            if (!rows_received[i]) {
+                printf(" %d", i);
+                // Keep missing rows as zeros (no interpolation)
+                for (int j = 0; j < 12; j++) {
+                    frame_data[i][j] = 0;
                 }
             }
         }
+        printf("\n");
+    }
+    else {
+        printf("Successfully captured all 12 rows!\n");
     }
 
     Continue_Flag = false;
