@@ -1,8 +1,11 @@
 //#include "stdafx.h"
 #include "InterfaceObj.h"
 #include "HidMgr.h"
+#include <cstdio>
+#include <vector>
 
 extern CInterfaceObject theInterfaceObject;
+extern uint8_t RxData[RxNum];
 
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)
@@ -40,4 +43,16 @@ extern "C" {
         FindTheHID();
     }
 
+    // New: Print all queued HID reports (non-blocking)
+    EXPORT void print_hid_reports() {
+        std::vector<uint8_t> report;
+        while (ReadHIDInputReportFromQueue()) {
+            // RxData is filled by ReadHIDInputReportFromQueue
+            printf("Received report: ");
+            for (int i = 0; i < RxNum; ++i) {
+                printf("%02x ", RxData[i]);
+            }
+            printf("\n");
+        }
+    }
 }
