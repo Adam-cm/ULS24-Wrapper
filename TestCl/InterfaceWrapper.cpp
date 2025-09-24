@@ -96,9 +96,15 @@ extern "C" {
         // If running as root, we can lock pages in memory
         if (geteuid() == 0) {
             mlockall(MCL_CURRENT | MCL_FUTURE);
+
+            // Pi 5 specific: set CPU scheduler for USB processing thread
+            system("echo 60 > /proc/sys/kernel/sched_rt_runtime_us");
+
+            // Pi 5 has USB 3.0 - can adjust USB parameters if needed
+            system("echo 0 > /sys/module/usbcore/parameters/autosuspend");
         }
 
-        // Disable CPU scaling to maintain consistent performance
+        // Pi 5 has better CPU governor management
         system("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1");
 #endif
     }
