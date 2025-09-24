@@ -34,16 +34,6 @@ hid_device* DeviceHandle = nullptr;
 uint8_t RxData[RxNum];
 uint8_t TxData[TxNum];
 
-#ifdef __linux__
-// Pi 5 has 4 high-performance Cortex-A76 cores
-// Use cores 2-3 for real-time tasks, leave cores 0-1 for system
-cpu_set_t cpuset;
-CPU_ZERO(&cpuset);
-CPU_SET(2, &cpuset);  // Use core 2 (Pi 5 specific)
-CPU_SET(3, &cpuset);  // And core 3 for multi-threading 
-pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-#endif
-
 // Just implement the methods directly:
 bool CircularBuffer::push(std::vector<uint8_t>&& report) {
     size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
