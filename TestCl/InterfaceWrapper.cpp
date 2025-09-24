@@ -23,7 +23,7 @@ extern uint8_t RxData[RxNum];
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
-// C++ linkage function
+// C++ linkage function - KEEP THIS OUTSIDE extern "C" block
 int reset_usb_endpoints() {
 #ifdef __linux__
     if (DeviceHandle) {
@@ -97,15 +97,22 @@ extern "C" {
         if (geteuid() == 0) {
             mlockall(MCL_CURRENT | MCL_FUTURE);
 
-            // Pi 5 specific: set CPU scheduler for USB processing thread
-            system("echo 60 > /proc/sys/kernel/sched_rt_runtime_us");
+            // Use safer system calls
+            FILE* f = fopen("/proc/sys/kernel/sched_rt_runtime_us", "w");
+            if (f) {
+                fprintf(f, "60\n");
+                fclose(f);
+            }
 
-            // Pi 5 has USB 3.0 - can adjust USB parameters if needed
-            system("echo 0 > /sys/module/usbcore/parameters/autosuspend");
+            f = fopen("/sys/module/usbcore/parameters/autosuspend", "w");
+            if (f) {
+                fprintf(f, "0\n");
+                fclose(f);
+            }
         }
 
-        // Pi 5 has better CPU governor management
-        system("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1");
+        // Use safer approach for CPU governor
+        system("which cpufreq-set >/dev/null 2>&1 && for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -f $cpu ] && echo performance > $cpu 2>/dev/null || true; done");
 #endif
     }
 
