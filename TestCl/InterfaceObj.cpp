@@ -166,65 +166,88 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    m_TrimReader.Capture12(chan);
-    WriteHIDOutputReport();
-    std::memset(TxData, 0, sizeof(TxData));
-
-    Continue_Flag = true;
-    int no_data_count = 0;
-    const int max_no_data_count = 100;  // 10 seconds with 100ms sleep
-
-    // Track which rows we've received
+    // On Pi, we'll do multiple passes to ensure we get all rows
+    const int MAX_PASSES = 3;
     bool rows_received[12] = { false };
-    int rows_received_count = 0;
+    int total_rows = 0;
 
-    printf("Waiting for sensor data...\n");
+    for (int pass = 1; pass <= MAX_PASSES; pass++) {
+        printf("Capture pass %d/%d\n", pass, MAX_PASSES);
 
-    // Keep reading until we get all rows or timeout
-    while (Continue_Flag && rows_received_count < 12) {
-        if (ReadHIDInputReportFromQueue()) {
-            // We have data, check which row it is
-            uint8_t row = RxData[4];
+        // Send capture command each time
+        m_TrimReader.Capture12(chan);
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
 
-            if (row < 12 && !rows_received[row]) {
-                ProcessRowData();
-                rows_received[row] = true;
-                rows_received_count++;
-                printf("Processing row %d (%d/12 rows received)\n", row, rows_received_count);
+        Continue_Flag = true;
+        int timeout_count = 0;
+        const int max_timeout = 50; // 5 seconds with 100ms sleep
+
+        // Clear the queue before starting to read
+        while (ReadHIDInputReportFromQueue()) {
+            // Just drain queue
+        }
+
+        // Try to get as many rows as possible in this pass
+        while (Continue_Flag && timeout_count < max_timeout && total_rows < 12) {
+            if (ReadHIDInputReportFromQueue()) {
+                uint8_t row = RxData[4];
+                if (row < 12 && !rows_received[row]) {
+                    ProcessRowData();
+                    rows_received[row] = true;
+                    total_rows++;
+                    printf("Pass %d: Got row %d (%d/12 total rows)\n", pass, row, total_rows);
+                    timeout_count = 0; // Reset timeout counter on successful read
+                }
+            }
+            else {
+                // No data in queue, sleep briefly
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                timeout_count++;
             }
 
-            no_data_count = 0; // Reset timeout counter
-        }
-        else {
-            // No data available, wait a bit
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            no_data_count++;
-
-            // Timeout if no data for too long
-            if (no_data_count >= max_no_data_count) {
-                printf("No more data after %d attempts, received %d/12 rows\n",
-                    max_no_data_count, rows_received_count);
+            // If we got all rows, exit early
+            if (total_rows == 12) {
+                printf("Got all 12 rows!\n");
                 break;
             }
         }
+
+        // Stop current capture
+        Continue_Flag = false;
+
+        // If we have all rows, we're done
+        if (total_rows == 12) {
+            break;
+        }
+
+        // If this wasn't the last pass, report missing rows
+        if (pass < MAX_PASSES) {
+            printf("After pass %d, missing rows:", pass);
+            for (int i = 0; i < 12; i++) {
+                if (!rows_received[i]) {
+                    printf(" %d", i);
+                }
+            }
+            printf("\n");
+
+            // Short delay between passes
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
     }
 
-    // Report which rows were missed
-    if (rows_received_count < 12) {
-        printf("Warning: Missing rows: ");
+    // Final report
+    if (total_rows < 12) {
+        printf("Warning: Could only capture %d/12 rows. Missing rows:", total_rows);
         for (int i = 0; i < 12; i++) {
             if (!rows_received[i]) {
-                printf("%d ", i);
+                printf(" %d", i);
             }
         }
         printf("\n");
     }
-    else {
-        printf("Successfully received all 12 rows\n");
-    }
 
-    Continue_Flag = false;
-    return (rows_received_count > 0) ? 0 : 1;  // Success if we got any rows
+    return (total_rows > 0) ? 0 : 1;
 }
 
 int CInterfaceObject::CaptureFrame24()

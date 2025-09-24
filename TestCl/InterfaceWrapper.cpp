@@ -3,6 +3,8 @@
 #include "HidMgr.h"
 #include <cstdio>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 // Linux-specific headers
 #ifdef __linux__
@@ -14,11 +16,24 @@
 extern CInterfaceObject theInterfaceObject;
 extern uint8_t RxData[RxNum];
 
+extern hid_device* DeviceHandle;
+extern int VENDOR_ID;
+extern int PRODUCT_ID;
+
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)
 #else
 #define EXPORT __attribute__((visibility("default")))
 #endif
+
+int check_data_flow() {
+    // Try to read from the queue without blocking
+    int count = 0;
+    while (ReadHIDInputReportFromQueue()) {
+        count++;
+    }
+    return count; // Return how many reports were in the queue
+}
 
 extern "C" {
 
@@ -50,8 +65,6 @@ extern "C" {
         FindTheHID();
     }
 
-    extern size_t GetBufferSize(); // Declare in HidMgr.h and implement
-
     EXPORT int get_buffer_capacity() {
         return CIRCULAR_BUFFER_SIZE;
     }
@@ -68,15 +81,6 @@ extern "C" {
             return 3;
         }
         return 0;
-    }
-
-    EXPORT int check_data_flow() {
-        // Try to read from the queue without blocking
-        int count = 0;
-        while (ReadHIDInputReportFromQueue()) {
-            count++;
-        }
-        return count; // Return how many reports were in the queue
     }
 
     EXPORT void optimize_for_pi() {
@@ -96,7 +100,7 @@ extern "C" {
         return;
     }
 
-    EXPORT int reset_usb_endpoints() {
+    int reset_usb_endpoints() {
 #ifdef __linux__
         if (DeviceHandle) {
             // First close and reopen device

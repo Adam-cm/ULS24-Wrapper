@@ -25,64 +25,69 @@ int Continue_Flag = 0;
 bool ee_continue = false;
 int chan_num = 0;
 
-// Vendor and Product IDs
-#define VENDOR_ID  0x0483
-#define PRODUCT_ID 0x5750
+// REMOVE THESE - already defined in HidMgr.h
+// #define VENDOR_ID  0x0483
+// #define PRODUCT_ID 0x5750
 
-#define TxNum 64
-#define RxNum 64
-// HIDREPORTNUM is already defined in HidMgr.h as (64+1)
+// REMOVE THESE - already defined in HidMgr.h
+// #define TxNum 64
+// #define RxNum 64
 
-// Global device handle
+// Global device handle (already declared in header)
+// hid_device* DeviceHandle = nullptr;
+// Just keep the definition:
 hid_device* DeviceHandle = nullptr;
 
 // Buffers for communication (1st byte is report ID, usually 0)
 uint8_t RxData[RxNum];
 uint8_t TxData[TxNum];
 
-// Circular buffer for HID reports - much more efficient than a queue
-// 512 reports × 64 bytes = 32KB buffer
-#define CIRCULAR_BUFFER_SIZE 512
+// REMOVE THIS - already defined in HidMgr.h
+// #define CIRCULAR_BUFFER_SIZE 512
 
-struct CircularBuffer {
-    std::array<std::vector<uint8_t>, CIRCULAR_BUFFER_SIZE> buffer;
-    std::atomic<size_t> head{ 0 };
-    std::atomic<size_t> tail{ 0 };
-
-    bool push(std::vector<uint8_t>&& report) {
-        size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
-        if (next_head == tail) {
-            return false; // Buffer full
-        }
-        buffer[head] = std::move(report);
-        head = next_head;
-        return true;
+// Implementation of CircularBuffer methods
+bool CircularBuffer::push(std::vector<uint8_t>&& report) {
+    size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
+    if (next_head == tail) {
+        return false; // Buffer full
     }
+    buffer[head] = std::move(report);
+    head = next_head;
+    return true;
+}
 
-    bool pop(std::vector<uint8_t>& report) {
-        if (head == tail) {
-            return false; // Buffer empty
-        }
-        report = std::move(buffer[tail]);
-        tail = (tail + 1) % CIRCULAR_BUFFER_SIZE;
-        return true;
+bool CircularBuffer::pop(std::vector<uint8_t>& report) {
+    if (head == tail) {
+        return false; // Buffer empty
     }
+    report = std::move(buffer[tail]);
+    tail = (tail + 1) % CIRCULAR_BUFFER_SIZE;
+    return true;
+}
 
-    bool empty() const {
-        return head == tail;
-    }
+bool CircularBuffer::empty() const {
+    return head == tail;
+}
 
-    size_t size() const {
-        return (head >= tail) ? (head - tail) : (CIRCULAR_BUFFER_SIZE - tail + head);
-    }
-};
+size_t CircularBuffer::size() const {
+    return (head >= tail) ? (head - tail) : (CIRCULAR_BUFFER_SIZE - tail + head);
+}
 
-// Replace queue with circular buffer
+// Create the buffer and sync objects
 static CircularBuffer hid_report_buffer;
 static std::mutex hid_buffer_mutex;
 static std::condition_variable hid_buffer_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
+
+// Add the check_data_flow implementation (already declared in header)
+int check_data_flow() {
+    int count = 0;
+    while (ReadHIDInputReportFromQueue()) {
+        count++;
+    }
+    return count;
+}
 
 // Dedicated read thread function - optimized for maximum throughput
 static void HidReadThreadFunc() {
@@ -222,7 +227,7 @@ bool ReadHIDInputReportFromQueue() {
 }
 
 // Blocking read with timeout
-bool ReadHIDInputReportBlocking(int timeout_ms = 1000) {
+bool ReadHIDInputReportBlocking(int timeout_ms) {
     std::vector<uint8_t> report;
     {
         std::unique_lock<std::mutex> lock(hid_buffer_mutex);
@@ -243,7 +248,7 @@ bool ReadHIDInputReportBlocking(int timeout_ms = 1000) {
 }
 
 // Add this function to use the timeout feature of hidapi
-bool ReadHIDInputReportTimeout(int length, int timeout_ms = 1000) {
+bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
     unsigned char InputReport[HIDREPORTNUM] = { 0 };
     // Use hid_read_timeout instead of hid_read to avoid indefinite blocking
     int res = hid_read_timeout(DeviceHandle, InputReport, length, timeout_ms);

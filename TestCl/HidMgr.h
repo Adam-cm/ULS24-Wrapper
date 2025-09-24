@@ -3,6 +3,9 @@
 
 #pragma once
 
+// Include the hidapi header directly to get the proper hid_device type
+#include <hidapi/hidapi.h>
+
 #ifdef _WIN32
 #include <wtypes.h>
 #include <initguid.h>
@@ -28,6 +31,10 @@ extern int Continue_Flag;
 #define HIDREPORTNUM (64+1)       //  HID report num bytes
 #define HIDBUFSIZE 12
 
+// Vendor and Product IDs
+#define VENDOR_ID  0x0483
+#define PRODUCT_ID 0x5750
+
 #define GetCmd      0x02        // return 0x02 command 
 #define ReadCmd     0x04        // Read command
 
@@ -45,6 +52,9 @@ struct CircularBuffer {
     bool empty() const;
     size_t size() const;
 };
+
+// Global device handle
+extern hid_device* DeviceHandle;
 
 // HID device management
 bool FindTheHID();
@@ -66,6 +76,7 @@ void ReadHIDInputReport(void);
 // Buffer management
 size_t GetBufferSize();
 int reset_usb_endpoints();
+int check_data_flow();
 
 // (Legacy/Windows-specific, can be guarded or removed if not used on Linux)
 void DisplayInputReport();
