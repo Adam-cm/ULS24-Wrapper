@@ -164,31 +164,38 @@ void CInterfaceObject::ProcessRowData()
     frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
 }
 
-int CInterfaceObject::CaptureFrame12(uint8_t chan) {
+int CInterfaceObject::CaptureFrame12(uint8_t chan)
+{
     m_TrimReader.Capture12(chan);
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
 
     Continue_Flag = true;
     int timeout_count = 0;
-    const int max_timeouts = 10;  // Allow 10 timeouts (10 seconds) before giving up
+    const int max_timeouts = 10; // 10 seconds
+
+    // Add a diagnostic print to check data flow
+    printf("Waiting for sensor data...\n");
 
     while (Continue_Flag) {
-        // Use timeout version instead of indefinite blocking
-        if (ReadHIDInputReportTimeout(HIDREPORTNUM, 1000)) { // 1 second timeout
+        // Use the non-blocking read that pulls from the queue filled by the thread
+        if (ReadHIDInputReportFromQueue()) {
+            // We got data, process it
             ProcessRowData();
-            timeout_count = 0;  // Reset timeout counter if we got data
+            timeout_count = 0; // Reset timeout counter
+            // Debug print (optional)
+            printf("Processing row %d\n", RxData[4]); // Print row number
         }
         else {
-            timeout_count++;
-            printf("No data received for %d seconds\n", timeout_count);
+            // No data in queue, wait a bit and increment timeout
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            timeout_count += 1;
 
-            if (timeout_count >= max_timeouts) {
+            if (timeout_count >= 10 * max_timeouts) { // 10 * max_timeouts * 100ms = max_timeouts seconds
                 printf("No data received after %d seconds, giving up\n", max_timeouts);
-                return 1;  // Return error code
+                return 1; // Return error
             }
         }
-        std::memset(RxData, 0, sizeof(RxData));
     }
     return 0;
 }

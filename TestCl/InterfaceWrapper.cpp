@@ -43,6 +43,15 @@ extern "C" {
         FindTheHID();
     }
 
+    EXPORT int check_data_flow() {
+        // Try to read from the queue without blocking
+        int count = 0;
+        while (ReadHIDInputReportFromQueue()) {
+            count++;
+        }
+        return count; // Return how many reports were in the queue
+    }
+
     EXPORT void cancel_capture() {
         Continue_Flag = false;
     }
