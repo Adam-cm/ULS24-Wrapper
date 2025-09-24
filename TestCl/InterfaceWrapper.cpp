@@ -23,10 +23,46 @@ extern uint8_t RxData[RxNum];
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
+// Move this function OUTSIDE the extern "C" block
+int reset_usb_endpoints() {
+#ifdef __linux__
+    if (DeviceHandle) {
+        // First close and reopen device
+        hid_close(DeviceHandle);
+
+        // Small delay to let USB settle
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Reopen
+        DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+        if (!DeviceHandle) {
+            return 0;  // Failed to reopen
+        }
+
+        // Reset USB endpoints via sysfs if possible
+        if (geteuid() == 0) {
+            // Try to find and reset the USB endpoints
+            system("for ep in /sys/bus/usb/devices/*/ep_*; do "
+                "  echo 0 > $ep/buffer_size; "
+                "  echo 512 > $ep/buffer_size; "
+                "done");
+        }
+
+        // Set non-blocking mode for our read thread
+        hid_set_nonblocking(DeviceHandle, 1);
+        return 1;  // Success
+    }
+#endif
+    return 0;  // Not implemented or failed
+}
+
 extern "C" {
 
-    // Remove the extern declarations like:
-    // extern size_t GetBufferSize(); - already in HidMgr.h
+    EXPORT void selchan(int chan) {
+        theInterfaceObject.SelSensor(chan);
+    }
+
+    // Rest of your existing functions
 
     EXPORT int get_buffer_capacity() {
         return CIRCULAR_BUFFER_SIZE;
@@ -40,10 +76,15 @@ extern "C" {
         if (length >= 3) {
             stats[0] = CIRCULAR_BUFFER_SIZE;
             stats[1] = static_cast<int>(GetBufferSize());
-            stats[2] = check_data_flow();  // Use the function from HidMgr.h
+            stats[2] = check_data_flow();
             return 3;
         }
         return 0;
+    }
+
+    // Add a wrapper for reset_usb_endpoints if you need to expose it to C
+    EXPORT int c_reset_usb_endpoints() {
+        return reset_usb_endpoints();
     }
 
     EXPORT void optimize_for_pi() {
@@ -61,38 +102,6 @@ extern "C" {
     #endif
         
         return;
-    }
-
-    int reset_usb_endpoints() {
-#ifdef __linux__
-        if (DeviceHandle) {
-            // First close and reopen device
-            hid_close(DeviceHandle);
-
-            // Small delay to let USB settle
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-            // Reopen
-            DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
-            if (!DeviceHandle) {
-                return 0;  // Failed to reopen
-            }
-
-            // Reset USB endpoints via sysfs if possible
-            if (geteuid() == 0) {
-                // Try to find and reset the USB endpoints
-                system("for ep in /sys/bus/usb/devices/*/ep_*; do "
-                    "  echo 0 > $ep/buffer_size; "
-                    "  echo 512 > $ep/buffer_size; "
-                    "done");
-            }
-
-            // Set non-blocking mode for our read thread
-            hid_set_nonblocking(DeviceHandle, 1);
-            return 1;  // Success
-        }
-#endif
-        return 0;  // Not implemented or failed
     }
 
     EXPORT void cancel_capture() {
