@@ -117,4 +117,13 @@ extern "C" {
             printf("\n");
         }
     }
+
+    EXPORT int check_data_flow() {
+        // Directly implement the function here
+        int count = 0;
+        while (ReadHIDInputReportFromQueue()) {
+            count++;
+        }
+        return count;
+    }
 }
