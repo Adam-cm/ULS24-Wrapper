@@ -166,10 +166,18 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    // On Pi, we'll do multiple passes to ensure we get all rows
-    const int MAX_PASSES = 3;
+    // Explicitly target missing rows (2,4,6,8,10)
+    const int MAX_PASSES = 5;  // Increase passes to ensure we get all rows
     bool rows_received[12] = { false };
     int total_rows = 0;
+
+    // Aggressively clear buffer before starting
+    printf("Clearing buffer before capture...\n");
+    int cleared = 0;
+    while (ReadHIDInputReportFromQueue()) {
+        cleared++;
+    }
+    printf("Cleared %d reports from buffer\n", cleared);
 
     for (int pass = 1; pass <= MAX_PASSES; pass++) {
         printf("Capture pass %d/%d\n", pass, MAX_PASSES);
@@ -181,12 +189,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 
         Continue_Flag = true;
         int timeout_count = 0;
-        const int max_timeout = 50; // 5 seconds with 100ms sleep
-
-        // Clear the queue before starting to read
-        while (ReadHIDInputReportFromQueue()) {
-            // Just drain queue
-        }
+        const int max_timeout = 200; // More attempts with shorter sleeps
 
         // Try to get as many rows as possible in this pass
         while (Continue_Flag && timeout_count < max_timeout && total_rows < 12) {
@@ -201,38 +204,22 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                 }
             }
             else {
-                // No data in queue, sleep briefly
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                // Much shorter sleep to process buffer more frequently
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 timeout_count++;
             }
 
             // If we got all rows, exit early
-            if (total_rows == 12) {
-                printf("Got all 12 rows!\n");
-                break;
-            }
+            if (total_rows == 12) break;
         }
 
         // Stop current capture
         Continue_Flag = false;
 
-        // If we have all rows, we're done
-        if (total_rows == 12) {
-            break;
-        }
-
-        // If this wasn't the last pass, report missing rows
-        if (pass < MAX_PASSES) {
-            printf("After pass %d, missing rows:", pass);
-            for (int i = 0; i < 12; i++) {
-                if (!rows_received[i]) {
-                    printf(" %d", i);
-                }
-            }
-            printf("\n");
-
-            // Short delay between passes
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // On odd-numbered passes, specifically request missing even-numbered rows
+        if (pass % 2 == 1 && total_rows < 12) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("Targeting missing even rows...\n");
         }
     }
 
@@ -240,9 +227,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     if (total_rows < 12) {
         printf("Warning: Could only capture %d/12 rows. Missing rows:", total_rows);
         for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) {
-                printf(" %d", i);
-            }
+            if (!rows_received[i]) printf(" %d", i);
         }
         printf("\n");
     }

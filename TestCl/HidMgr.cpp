@@ -34,6 +34,16 @@ hid_device* DeviceHandle = nullptr;
 uint8_t RxData[RxNum];
 uint8_t TxData[TxNum];
 
+#ifdef __linux__
+// Pi 5 has 4 high-performance Cortex-A76 cores
+// Use cores 2-3 for real-time tasks, leave cores 0-1 for system
+cpu_set_t cpuset;
+CPU_ZERO(&cpuset);
+CPU_SET(2, &cpuset);  // Use core 2 (Pi 5 specific)
+CPU_SET(3, &cpuset);  // And core 3 for multi-threading 
+pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
+
 // Just implement the methods directly:
 bool CircularBuffer::push(std::vector<uint8_t>&& report) {
     size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
@@ -69,15 +79,23 @@ static std::condition_variable hid_buffer_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
 
-// Dedicated read thread function - optimized for maximum throughput
 static void HidReadThreadFunc() {
     // Pre-allocate vector to avoid allocation during read
     std::vector<uint8_t> report(RxNum);
     unsigned char InputReport[HIDREPORTNUM];
 
+#ifdef __linux__
+    // Set real-time priority for this thread
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) == 0) {
+        printf("HID thread using real-time scheduling\n");
+    }
+#endif
+
     while (hid_read_thread_running) {
-        // Use non-blocking mode for maximum throughput
-        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 1);
+        // Use shorter timeout for maximum throughput (0ms = non-blocking)
+        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 0);
         if (res > 0) {
             // Reuse pre-allocated vector with copy
             report.assign(InputReport + 1, InputReport + 1 + RxNum);
@@ -95,8 +113,8 @@ static void HidReadThreadFunc() {
             hid_buffer_cv.notify_one();
         }
 
-        // Minimal sleep to avoid excessive CPU usage
-        //std::this_thread::sleep_for(std::chrono::microseconds(100));
+        // Minimal sleep - just enough to prevent CPU maxing out
+        std::this_thread::sleep_for(std::chrono::microseconds(50)); // 50µs instead of 100µs
     }
 }
 
