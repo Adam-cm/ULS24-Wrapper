@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <vector>
+#include <array>
 
 // Linux-specific headers - must be included outside of functions
 #ifndef _WIN32
@@ -39,51 +40,78 @@ hid_device* DeviceHandle = nullptr;
 uint8_t RxData[RxNum];
 uint8_t TxData[TxNum];
 
-// Threaded read queue and synchronization
-static std::queue<std::vector<uint8_t>> hid_report_queue;
-static std::mutex hid_queue_mutex;
-static std::condition_variable hid_queue_cv;
+// Circular buffer for HID reports - much more efficient than a queue
+// 512 reports × 64 bytes = 32KB buffer
+#define CIRCULAR_BUFFER_SIZE 512
+
+struct CircularBuffer {
+    std::array<std::vector<uint8_t>, CIRCULAR_BUFFER_SIZE> buffer;
+    std::atomic<size_t> head{ 0 };
+    std::atomic<size_t> tail{ 0 };
+
+    bool push(std::vector<uint8_t>&& report) {
+        size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
+        if (next_head == tail) {
+            return false; // Buffer full
+        }
+        buffer[head] = std::move(report);
+        head = next_head;
+        return true;
+    }
+
+    bool pop(std::vector<uint8_t>& report) {
+        if (head == tail) {
+            return false; // Buffer empty
+        }
+        report = std::move(buffer[tail]);
+        tail = (tail + 1) % CIRCULAR_BUFFER_SIZE;
+        return true;
+    }
+
+    bool empty() const {
+        return head == tail;
+    }
+
+    size_t size() const {
+        return (head >= tail) ? (head - tail) : (CIRCULAR_BUFFER_SIZE - tail + head);
+    }
+};
+
+// Replace queue with circular buffer
+static CircularBuffer hid_report_buffer;
+static std::mutex hid_buffer_mutex;
+static std::condition_variable hid_buffer_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
 
-// Dedicated read thread function optimized for Raspberry Pi
+// Dedicated read thread function - optimized for maximum throughput
 static void HidReadThreadFunc() {
-    // Set highest possible priority for this thread
-#ifndef _WIN32
-    // Try to set real-time priority
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_RR);  // Round-robin scheduler is better on Pi
-    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
-    
-    // If we're root, we can also set CPU affinity
-    #if defined(__linux__)
-    // Check if we're running as root
-    if (geteuid() == 0) {
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(3, &cpuset);  // Use core 3 (keep cores 0-2 for system)
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-    }
-    #endif
-#endif
+    // Pre-allocate vector to avoid allocation during read
+    std::vector<uint8_t> report(RxNum);
+    unsigned char InputReport[HIDREPORTNUM];
 
-    // Direct, aggressive read loop
     while (hid_read_thread_running) {
-        unsigned char InputReport[HIDREPORTNUM] = { 0 };
-
-        // Use smallest possible timeout for faster response
+        // Use non-blocking mode for maximum throughput
         int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 1);
         if (res > 0) {
-            std::vector<uint8_t> report(InputReport + 1, InputReport + 1 + RxNum);
+            // Reuse pre-allocated vector with copy
+            report.assign(InputReport + 1, InputReport + 1 + RxNum);
+
+            // Use lock with minimal scope
             {
-                std::lock_guard<std::mutex> lock(hid_queue_mutex);
-                hid_report_queue.push(std::move(report));
+                std::lock_guard<std::mutex> lock(hid_buffer_mutex);
+                if (!hid_report_buffer.push(std::move(report))) {
+                    // Buffer full - very unlikely with 512-entry buffer
+                    fprintf(stderr, "Warning: HID buffer overflow!\n");
+                }
+                // Allocate new vector since we moved the old one
+                report = std::vector<uint8_t>(RxNum);
             }
-            hid_queue_cv.notify_one();
+            hid_buffer_cv.notify_one();
         }
 
-        // On Pi, we need a tiny sleep to avoid overwhelming the CPU
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        // Minimal sleep to avoid excessive CPU usage
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 }
 
@@ -108,13 +136,21 @@ void StopHidReadThread() {
     }
 }
 
+// Get current buffer size
+size_t GetBufferSize() {
+    std::lock_guard<std::mutex> lock(hid_buffer_mutex);
+    return hid_report_buffer.size();
+}
+
 // Retrieve the next HID report (blocks until available)
 bool GetNextHidReport(std::vector<uint8_t>& report) {
-    std::unique_lock<std::mutex> lock(hid_queue_mutex);
-    hid_queue_cv.wait(lock, [] { return !hid_report_queue.empty() || !hid_read_thread_running; });
-    if (!hid_report_queue.empty()) {
-        report = std::move(hid_report_queue.front());
-        hid_report_queue.pop();
+    std::unique_lock<std::mutex> lock(hid_buffer_mutex); // Use hid_buffer_mutex instead of hid_queue_mutex
+    hid_buffer_cv.wait(lock, [] {
+        return !hid_report_buffer.empty() || !hid_read_thread_running;
+        });
+
+    if (!hid_report_buffer.empty()) {
+        hid_report_buffer.pop(report); // Use circular buffer pop instead of queue operations
         return true;
     }
     return false;
@@ -168,18 +204,16 @@ bool WriteHIDOutputReport(int length)
     return true;
 }
 
-// Read HID input report from the queue (non-blocking)
-// Returns true if a report was available, false otherwise
-bool ReadHIDInputReportFromQueue()
-{
+// Non-blocking read from circular buffer
+bool ReadHIDInputReportFromQueue() {
     std::vector<uint8_t> report;
     {
-        std::lock_guard<std::mutex> lock(hid_queue_mutex);
-        if (hid_report_queue.empty())
-            return false;
-        report = std::move(hid_report_queue.front());
-        hid_report_queue.pop();
+        std::lock_guard<std::mutex> lock(hid_buffer_mutex);
+        if (!hid_report_buffer.pop(report)) {
+            return false; // No data
+        }
     }
+
     if (report.size() == RxNum) {
         std::memcpy(RxData, report.data(), RxNum);
         return true;
@@ -187,11 +221,21 @@ bool ReadHIDInputReportFromQueue()
     return false;
 }
 
-// Blocking version: waits for a report
-bool ReadHIDInputReportBlocking()
-{
+// Blocking read with timeout
+bool ReadHIDInputReportBlocking(int timeout_ms = 1000) {
     std::vector<uint8_t> report;
-    if (GetNextHidReport(report) && report.size() == RxNum) {
+    {
+        std::unique_lock<std::mutex> lock(hid_buffer_mutex);
+        bool success = hid_buffer_cv.wait_for(lock,
+            std::chrono::milliseconds(timeout_ms),
+            [] { return !hid_report_buffer.empty() || !hid_read_thread_running; });
+
+        if (!success || !hid_report_buffer.pop(report)) {
+            return false; // Timeout or thread stopped
+        }
+    }
+
+    if (report.size() == RxNum) {
         std::memcpy(RxData, report.data(), RxNum);
         return true;
     }
@@ -212,4 +256,4 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms = 1000) {
 
 // C-style wrappers for compatibility
 void WriteHIDOutputReport(void) { WriteHIDOutputReport(HIDREPORTNUM); }
-void ReadHIDInputReport(void) { ReadHIDInputReportBlocking(); }
+void ReadHIDInputReport(void) { ReadHIDInputReportBlocking(); } // This is fine as it uses the default parameter

@@ -15,6 +15,8 @@ bool DeviceNameMatch(LPARAM lParam);
 #endif
 
 #include <vector>
+#include <array>
+#include <atomic>
 
 #define MAX_LOADSTRING 256
 
@@ -29,6 +31,21 @@ extern int Continue_Flag;
 #define GetCmd      0x02        // return 0x02 command 
 #define ReadCmd     0x04        // Read command
 
+// Circular buffer size - 512 reports × 64 bytes = 32KB buffer
+#define CIRCULAR_BUFFER_SIZE 512
+
+// Circular buffer structure for HID reports
+struct CircularBuffer {
+    std::array<std::vector<uint8_t>, CIRCULAR_BUFFER_SIZE> buffer;
+    std::atomic<size_t> head{ 0 };
+    std::atomic<size_t> tail{ 0 };
+
+    bool push(std::vector<uint8_t>&& report);
+    bool pop(std::vector<uint8_t>& report);
+    bool empty() const;
+    size_t size() const;
+};
+
 // HID device management
 bool FindTheHID();
 void CloseHandles();
@@ -38,13 +55,17 @@ void StartHidReadThread();
 void StopHidReadThread();
 bool GetNextHidReport(std::vector<uint8_t>& report);
 bool ReadHIDInputReportFromQueue();
-bool ReadHIDInputReportBlocking();
-bool ReadHIDInputReportTimeout(int length, int timeout_ms);
+bool ReadHIDInputReportBlocking(int timeout_ms = 1000);
+bool ReadHIDInputReportTimeout(int length, int timeout_ms = 1000);
 
 // HID report I/O
 bool WriteHIDOutputReport(int length);
 void WriteHIDOutputReport(void);
 void ReadHIDInputReport(void);
+
+// Buffer management
+size_t GetBufferSize();
+int reset_usb_endpoints();
 
 // (Legacy/Windows-specific, can be guarded or removed if not used on Linux)
 void DisplayInputReport();
