@@ -41,7 +41,24 @@ extern "C" {
     }
 
     EXPORT void get(int chan) {
-        theInterfaceObject.CaptureFrame12(chan);
+        // Try multiple times if needed
+        for (int attempts = 0; attempts < 3; attempts++) {
+            theInterfaceObject.CaptureFrame12(chan);
+
+            // Check if data looks valid
+            bool hasGaps = false;
+            for (int i = 1; i < 12; i += 2) {
+                if (theInterfaceObject.frame_data[0][i] == 0) {
+                    hasGaps = true;
+                    break;
+                }
+            }
+
+            if (!hasGaps) break;
+
+            // Small delay between retries
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     }
 
     EXPORT void get_frame12(int* outbuf) {
@@ -90,29 +107,17 @@ extern "C" {
 
     EXPORT void optimize_for_pi() {
 #ifdef __linux__
-        // Set process priority
-        nice(-20);
-
-        // If running as root, we can lock pages in memory
+        // Pi 5 specific USB tuning
         if (geteuid() == 0) {
-            mlockall(MCL_CURRENT | MCL_FUTURE);
+            // Adjust USB polling interval
+            system("echo 1 > /sys/module/usbcore/parameters/usbfs_memory_mb");
 
-            // Use safer system calls
-            FILE* f = fopen("/proc/sys/kernel/sched_rt_runtime_us", "w");
-            if (f) {
-                fprintf(f, "60\n");
-                fclose(f);
-            }
+            // Set USB controller to high-performance mode
+            system("echo 0 > /sys/bus/usb/devices/*/power/autosuspend 2>/dev/null || true");
 
-            f = fopen("/sys/module/usbcore/parameters/autosuspend", "w");
-            if (f) {
-                fprintf(f, "0\n");
-                fclose(f);
-            }
+            // Disable USB power management
+            system("echo on > /sys/bus/usb/devices/*/power/control 2>/dev/null || true");
         }
-
-        // Use safer approach for CPU governor
-        system("which cpufreq-set >/dev/null 2>&1 && for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -f $cpu ] && echo performance > $cpu 2>/dev/null || true; done");
 #endif
     }
 
