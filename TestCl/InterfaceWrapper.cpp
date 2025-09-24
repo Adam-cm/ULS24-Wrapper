@@ -43,6 +43,10 @@ extern "C" {
         FindTheHID();
     }
 
+    EXPORT void cancel_capture() {
+        Continue_Flag = false;
+    }
+
     // New: Print all queued HID reports (non-blocking)
     EXPORT void print_hid_reports() {
         std::vector<uint8_t> report;

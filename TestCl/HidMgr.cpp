@@ -160,6 +160,18 @@ bool ReadHIDInputReportBlocking()
     return false;
 }
 
+// Add this function to use the timeout feature of hidapi
+bool ReadHIDInputReportTimeout(int length, int timeout_ms = 1000) {
+    unsigned char InputReport[HIDREPORTNUM] = { 0 };
+    // Use hid_read_timeout instead of hid_read to avoid indefinite blocking
+    int res = hid_read_timeout(DeviceHandle, InputReport, length, timeout_ms);
+    if (res > 0) {
+        std::memcpy(RxData, &InputReport[1], RxNum);
+        return true;
+    }
+    return false;
+}
+
 // C-style wrappers for compatibility
 void WriteHIDOutputReport(void) { WriteHIDOutputReport(HIDREPORTNUM); }
 void ReadHIDInputReport(void) { ReadHIDInputReportBlocking(); }

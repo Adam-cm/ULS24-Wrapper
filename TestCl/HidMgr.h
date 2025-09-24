@@ -39,6 +39,7 @@ void StopHidReadThread();
 bool GetNextHidReport(std::vector<uint8_t>& report);
 bool ReadHIDInputReportFromQueue();
 bool ReadHIDInputReportBlocking();
+bool ReadHIDInputReportTimeout(int length, int timeout_ms);
 
 // HID report I/O
 bool WriteHIDOutputReport(int length);

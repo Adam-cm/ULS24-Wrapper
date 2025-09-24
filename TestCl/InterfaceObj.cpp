@@ -164,15 +164,30 @@ void CInterfaceObject::ProcessRowData()
     frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
 }
 
-int CInterfaceObject::CaptureFrame12(uint8_t chan)
-{
+int CInterfaceObject::CaptureFrame12(uint8_t chan) {
     m_TrimReader.Capture12(chan);
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
+
     Continue_Flag = true;
+    int timeout_count = 0;
+    const int max_timeouts = 10;  // Allow 10 timeouts (10 seconds) before giving up
+
     while (Continue_Flag) {
-        ReadHIDInputReport();
-        ProcessRowData();
+        // Use timeout version instead of indefinite blocking
+        if (ReadHIDInputReportTimeout(HIDREPORTNUM, 1000)) { // 1 second timeout
+            ProcessRowData();
+            timeout_count = 0;  // Reset timeout counter if we got data
+        }
+        else {
+            timeout_count++;
+            printf("No data received for %d seconds\n", timeout_count);
+
+            if (timeout_count >= max_timeouts) {
+                printf("No data received after %d seconds, giving up\n", max_timeouts);
+                return 1;  // Return error code
+            }
+        }
         std::memset(RxData, 0, sizeof(RxData));
     }
     return 0;
