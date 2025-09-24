@@ -36,11 +36,22 @@ static std::condition_variable hid_queue_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
 
-// Dedicated read thread function
+// Dedicated read thread function - updated for higher priority
 static void HidReadThreadFunc() {
+    // Optional: Set thread to higher priority if possible
+#ifndef _WIN32  // Linux-specific
+    {
+        pthread_t this_thread = pthread_self();
+        struct sched_param params;
+        params.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        pthread_setschedparam(this_thread, SCHED_FIFO, &params);
+    }
+#endif
+
     while (hid_read_thread_running) {
         unsigned char InputReport[HIDREPORTNUM] = { 0 };
-        int res = hid_read(DeviceHandle, InputReport, HIDREPORTNUM);
+        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 10); // Short timeout
+
         if (res > 0) {
             std::vector<uint8_t> report(InputReport + 1, InputReport + 1 + RxNum);
             {
@@ -49,7 +60,7 @@ static void HidReadThreadFunc() {
             }
             hid_queue_cv.notify_one();
         }
-        // No sleep: read as fast as possible
+        // No sleep - read as fast as possible
     }
 }
 

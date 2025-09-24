@@ -2,6 +2,7 @@ import ctypes
 import numpy as np
 import os
 import time
+import atexit
 
 # Load the shared library
 so_path = '/home/adam1/ULS24-Wrapper/TestCl/ULSLIB.so'
@@ -19,38 +20,48 @@ ULS24.reset.argtypes = []
 ULS24.get_frame12.argtypes = [ctypes.POINTER(ctypes.c_int)]
 ULS24.check_data_flow.argtypes = []
 ULS24.check_data_flow.restype = ctypes.c_int
+ULS24.cancel_capture.argtypes = []
 
-# First diagnostic: check if device responds at all
-print("Resetting device...")
-result = ULS24.reset()
-print(f"Reset result: {result}")
+# Ensure we always clean up
+def cleanup():
+    ULS24.cancel_capture()
+    time.sleep(0.5)  # Give time for cleanup
 
-# Initialize the sensor
-print("Setting up sensor...")
-ULS24.selchan(1)
-ULS24.setinttime(4.0)
-ULS24.setgain(1)
+atexit.register(cleanup)
 
-# Check for any queued data before capture
-print("Checking for existing data...")
-count = ULS24.check_data_flow()
-print(f"Found {count} reports in queue before capture")
+try:
+    # Reset and initialize
+    print("Resetting device...")
+    result = ULS24.reset()
+    print(f"Reset result: {result}")
 
-# Start capture with a timeout
-print("Requesting frame with timeout...")
-start_time = time.time()
-result = ULS24.get(1)  # This should now timeout if no data arrives
-end_time = time.time()
-print(f"Frame capture completed in {end_time - start_time:.2f} seconds with result: {result}")
+    print("Setting up sensor...")
+    ULS24.selchan(1)
+    ULS24.setinttime(4.0)
+    ULS24.setgain(1)
+    
+    # Clear any pending data
+    count = ULS24.check_data_flow()
+    if count > 0:
+        print(f"Cleared {count} pending reports")
 
-# Check again for any data
-count = ULS24.check_data_flow()
-print(f"Found {count} reports in queue after capture")
+    # Capture frame
+    print("Requesting frame...")
+    start_time = time.time()
+    result = ULS24.get(1)
+    end_time = time.time()
+    print(f"Frame capture completed in {end_time - start_time:.2f} seconds with result: {result}")
+    
+    # Get frame data
+    FrameArrayType = ctypes.c_int * (12 * 12)
+    frame_buffer = FrameArrayType()
+    ULS24.get_frame12(frame_buffer)
+    frame_np = np.ctypeslib.as_array(frame_buffer).reshape((12, 12))
+    
+    print("\nFrame data:")
+    print(frame_np)
 
-# Try to get the frame anyway
-FrameArrayType = ctypes.c_int * (12 * 12)
-frame_buffer = FrameArrayType()
-ULS24.get_frame12(frame_buffer)
-frame_np = np.ctypeslib.as_array(frame_buffer).reshape((12, 12))
-print("Frame data (even if incomplete):")
-print(frame_np)
+except Exception as e:
+    print(f"Error: {e}")
+
+print("Test complete")

@@ -171,33 +171,60 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     std::memset(TxData, 0, sizeof(TxData));
 
     Continue_Flag = true;
-    int timeout_count = 0;
-    const int max_timeouts = 10; // 10 seconds
+    int no_data_count = 0;
+    const int max_no_data_count = 100;  // 10 seconds with 100ms sleep
 
-    // Add a diagnostic print to check data flow
+    // Track which rows we've received
+    bool rows_received[12] = { false };
+    int rows_received_count = 0;
+
     printf("Waiting for sensor data...\n");
 
-    while (Continue_Flag) {
-        // Use the non-blocking read that pulls from the queue filled by the thread
+    // Keep reading until we get all rows or timeout
+    while (Continue_Flag && rows_received_count < 12) {
         if (ReadHIDInputReportFromQueue()) {
-            // We got data, process it
-            ProcessRowData();
-            timeout_count = 0; // Reset timeout counter
-            // Debug print (optional)
-            printf("Processing row %d\n", RxData[4]); // Print row number
+            // We have data, check which row it is
+            uint8_t row = RxData[4];
+
+            if (row < 12 && !rows_received[row]) {
+                ProcessRowData();
+                rows_received[row] = true;
+                rows_received_count++;
+                printf("Processing row %d (%d/12 rows received)\n", row, rows_received_count);
+            }
+
+            no_data_count = 0; // Reset timeout counter
         }
         else {
-            // No data in queue, wait a bit and increment timeout
+            // No data available, wait a bit
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            timeout_count += 1;
+            no_data_count++;
 
-            if (timeout_count >= 10 * max_timeouts) { // 10 * max_timeouts * 100ms = max_timeouts seconds
-                printf("No data received after %d seconds, giving up\n", max_timeouts);
-                return 1; // Return error
+            // Timeout if no data for too long
+            if (no_data_count >= max_no_data_count) {
+                printf("No more data after %d attempts, received %d/12 rows\n",
+                    max_no_data_count, rows_received_count);
+                break;
             }
         }
     }
-    return 0;
+
+    // Report which rows were missed
+    if (rows_received_count < 12) {
+        printf("Warning: Missing rows: ");
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) {
+                printf("%d ", i);
+            }
+        }
+        printf("\n");
+    }
+    else {
+        printf("Successfully received all 12 rows\n");
+    }
+
+    Continue_Flag = false;
+    return (rows_received_count > 0) ? 0 : 1;  // Success if we got any rows
 }
 
 int CInterfaceObject::CaptureFrame24()
