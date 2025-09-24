@@ -96,7 +96,7 @@ static void HidReadThreadFunc() {
         }
 
         // Minimal sleep to avoid excessive CPU usage
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        //std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 }
 
