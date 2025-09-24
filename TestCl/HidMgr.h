@@ -73,10 +73,16 @@ bool WriteHIDOutputReport(int length);
 void WriteHIDOutputReport(void);
 void ReadHIDInputReport(void);
 
-// Buffer management
-size_t GetBufferSize();
-int reset_usb_endpoints();
-int check_data_flow();  // Make sure this is here
+#ifdef __cplusplus
+extern "C" {
+#endif
+    // Buffer management functions with C linkage for Python
+    size_t GetBufferSize();
+    int reset_usb_endpoints();
+    int check_data_flow(); // This is the C-linkage version that Python will call
+#ifdef __cplusplus
+}
+#endif
 
 // (Legacy/Windows-specific, can be guarded or removed if not used on Linux)
 void DisplayInputReport();

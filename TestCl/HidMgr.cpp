@@ -25,14 +25,6 @@ int Continue_Flag = 0;
 bool ee_continue = false;
 int chan_num = 0;
 
-// REMOVE THESE - already defined in HidMgr.h
-// #define VENDOR_ID  0x0483
-// #define PRODUCT_ID 0x5750
-
-// REMOVE THESE - already defined in HidMgr.h
-// #define TxNum 64
-// #define RxNum 64
-
 // Global device handle (already declared in header)
 // hid_device* DeviceHandle = nullptr;
 // Just keep the definition:
@@ -41,9 +33,6 @@ hid_device* DeviceHandle = nullptr;
 // Buffers for communication (1st byte is report ID, usually 0)
 uint8_t RxData[RxNum];
 uint8_t TxData[TxNum];
-
-// REMOVE THIS - already defined in HidMgr.h
-// #define CIRCULAR_BUFFER_SIZE 512
 
 // Just implement the methods directly:
 bool CircularBuffer::push(std::vector<uint8_t>&& report) {
@@ -79,15 +68,6 @@ static std::mutex hid_buffer_mutex;
 static std::condition_variable hid_buffer_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
-
-// Add the check_data_flow implementation (already declared in header)
-int check_data_flow() {
-    int count = 0;
-    while (ReadHIDInputReportFromQueue()) {
-        count++;
-    }
-    return count;
-}
 
 // Dedicated read thread function - optimized for maximum throughput
 static void HidReadThreadFunc() {
