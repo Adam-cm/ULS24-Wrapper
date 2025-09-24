@@ -45,7 +45,7 @@ uint8_t TxData[TxNum];
 // REMOVE THIS - already defined in HidMgr.h
 // #define CIRCULAR_BUFFER_SIZE 512
 
-// Implementation of CircularBuffer methods
+// Just implement the methods directly:
 bool CircularBuffer::push(std::vector<uint8_t>&& report) {
     size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
     if (next_head == tail) {

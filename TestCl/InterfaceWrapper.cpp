@@ -3,8 +3,9 @@
 #include "HidMgr.h"
 #include <cstdio>
 #include <vector>
-#include <thread>
-#include <chrono>
+#include <thread>  // Add this
+#include <chrono>  // Add this
+#include <hidapi/hidapi.h> // Add this
 
 // Linux-specific headers
 #ifdef __linux__
@@ -16,54 +17,16 @@
 extern CInterfaceObject theInterfaceObject;
 extern uint8_t RxData[RxNum];
 
-extern hid_device* DeviceHandle;
-extern int VENDOR_ID;
-extern int PRODUCT_ID;
-
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)
 #else
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
-int check_data_flow() {
-    // Try to read from the queue without blocking
-    int count = 0;
-    while (ReadHIDInputReportFromQueue()) {
-        count++;
-    }
-    return count; // Return how many reports were in the queue
-}
-
 extern "C" {
 
-    EXPORT void selchan(int chan) {
-        theInterfaceObject.SelSensor(chan);
-    }
-
-    EXPORT void get(int chan) {
-        theInterfaceObject.CaptureFrame12(chan);
-    }
-
-    EXPORT void get_frame12(int* outbuf) {
-        for (int i = 0; i < 12; ++i) {
-            for (int j = 0; j < 12; ++j) {
-                outbuf[i * 12 + j] = theInterfaceObject.frame_data[i][j];
-            }
-        }
-    }
-
-    EXPORT void setinttime(float itime) {
-        theInterfaceObject.SetIntTime(itime);
-    }
-
-    EXPORT void setgain(int gain) {
-        theInterfaceObject.SetGainMode(gain);
-    }
-
-    EXPORT void reset() {
-        FindTheHID();
-    }
+    // Remove the extern declarations like:
+    // extern size_t GetBufferSize(); - already in HidMgr.h
 
     EXPORT int get_buffer_capacity() {
         return CIRCULAR_BUFFER_SIZE;
@@ -75,9 +38,9 @@ extern "C" {
 
     EXPORT int get_buffer_stats(int* stats, int length) {
         if (length >= 3) {
-            stats[0] = CIRCULAR_BUFFER_SIZE;  // Total capacity
-            stats[1] = static_cast<int>(GetBufferSize());  // Current usage
-            stats[2] = check_data_flow();  // Packets processed
+            stats[0] = CIRCULAR_BUFFER_SIZE;
+            stats[1] = static_cast<int>(GetBufferSize());
+            stats[2] = check_data_flow();  // Use the function from HidMgr.h
             return 3;
         }
         return 0;

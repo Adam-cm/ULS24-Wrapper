@@ -76,7 +76,7 @@ void ReadHIDInputReport(void);
 // Buffer management
 size_t GetBufferSize();
 int reset_usb_endpoints();
-int check_data_flow();
+int check_data_flow();  // Make sure this is here
 
 // (Legacy/Windows-specific, can be guarded or removed if not used on Linux)
 void DisplayInputReport();
