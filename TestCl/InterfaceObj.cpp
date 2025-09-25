@@ -231,7 +231,11 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting optimized buffer-aware capture for channel %d\n", chan);
+    printf("Starting optimized buffer-aware capture for channel %d with enhanced debugging\n", chan);
+    
+    // DEBUG: Print capture parameters
+    printf("Capture parameters: Channel=%d, Gain=%d, IntTime=%.2f\n", 
+           chan, gain_mode, int_time);
 
     // Initialize tracking for each row
     bool rows_received[12] = { false };
@@ -250,6 +254,8 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         int flush_count = 0;
         while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 1) > 0) {
             flush_count++;
+            // Debug: Print first byte of each flushed packet
+            printf("Flushed packet %d, first byte: 0x%02X\n", flush_count, flush_buffer[0]);
             if (flush_count > 100) break;  // Prevent infinite loop
         }
         if (flush_count > 0) {
@@ -272,6 +278,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     std::memset(RxData, 0, sizeof(RxData));
 
     // Send capture command with improved error checking
+    printf("\n==== STARTING CAPTURE SEQUENCE ====\n");
     printf("Sending optimized capture command for channel %d\n", chan);
     m_TrimReader.Capture12(chan);
     bool writeSuccess = WriteHIDOutputReport();
@@ -293,6 +300,13 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     int reads = 0;
     int max_wait_time_ms = 200;  // Start with longer timeout
 
+    // Keep track of expected odd/even rows
+    bool expected_rows[12] = {false};
+    for (int i = 0; i < 12; i += 2) {
+        expected_rows[i] = true;      // Expect even rows (0, 2, 4, 6, 8, 10)
+        expected_rows[i+1] = true;    // Expect odd rows (1, 3, 5, 7, 9, 11)
+    }
+
     while (Continue_Flag && reads < MAX_READS && total_rows < 12) {
         // Adaptive timeout - shorter as we get more rows
         int timeout_ms = max_wait_time_ms;
@@ -300,6 +314,9 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             timeout_ms = max_wait_time_ms / 2;  // Reduce timeout after we get some rows
         }
 
+        // Debug: Print read attempt number and timeout
+        printf("Read attempt %d with timeout %d ms...\n", reads + 1, timeout_ms);
+        
         // Enhanced read with better error reporting
         bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, timeout_ms);
 
@@ -353,7 +370,12 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                 if (!rows_received[actual_row]) {
                     rows_received[actual_row] = true;
                     total_rows++;
-                    printf("Got row %d (%d/12 total)\n", actual_row, total_rows);
+                    printf("Got row %d (%d/12 total) - %s row\n", 
+                        actual_row, total_rows, 
+                        (actual_row % 2 == 0) ? "EVEN" : "ODD");
+                    
+                    // Debug: Mark this row as received
+                    expected_rows[actual_row] = false;
                 }
                 else {
                     printf("Duplicate row %d\n", actual_row);
@@ -365,17 +387,27 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             uint8_t frameFormat = row_type & 0x0F;
 
             if ((frameFormat == 0x02 || frameFormat == 0x22) && row < 12) {
+                printf("Processing legacy format data packet\n");
                 ProcessRowData();
 
                 if (!rows_received[row]) {
                     rows_received[row] = true;
                     total_rows++;
-                    printf("Got row %d from legacy format (%d/12 total)\n", row, total_rows);
+                    printf("Got row %d from legacy format (%d/12 total) - %s row\n", 
+                        row, total_rows, 
+                        (row % 2 == 0) ? "EVEN" : "ODD");
+                        
+                    // Debug: Mark this row as received
+                    expected_rows[row] = false;
                 }
             }
         }
         else if (cmd_type == 0x01) {
             printf("Command acknowledgement received\n");
+        }
+        else {
+            printf("Unknown command type: 0x%02x - Full packet dump:\n", cmd_type);
+            PrintHexData("UNKNOWN", RxData, RxNum);
         }
 
         // Clear RxData after processing to avoid reprocessing same data
@@ -384,24 +416,39 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 
         // If we're still missing rows after many reads, try a different approach
         if (reads > 100 && total_rows < 9 && reads % 50 == 0) {
-            printf("\nTrying alternative approach for missing rows at reads=%d...\n", reads);
+            printf("\n==== MISSING ROW RECOVERY ATTEMPT ====\n");
+            printf("Trying alternative approach for missing rows at reads=%d...\n", reads);
+            
+            // Print which rows we're still expecting
+            printf("Still expecting rows: ");
+            for (int i = 0; i < 12; i++) {
+                if (expected_rows[i]) printf("%d ", i);
+            }
+            printf("\n");
 
             // Ask explicitly for missing rows
             for (int r = 0; r < 12; r++) {
                 if (!rows_received[r]) {
-                    printf("Requesting missing row %d directly\n", r);
+                    printf("\n==== REQUESTING MISSING ROW %d DIRECTLY ====\n", r);
 
                     // Send command for this specific row
                     TxData[0] = 0xaa;
-                    TxData[1] = 0x02;
-                    TxData[2] = 0x0C;
-                    TxData[3] = ((chan - 1) << 4) | 0x02;  // Standard format
-                    TxData[4] = r;  // Request this specific row
+                    TxData[1] = 0x02;      // command
+                    TxData[2] = 0x0C;      // data length
+                    TxData[3] = ((chan-1) << 4) | 0x02;  // Standard format
+                    TxData[4] = r;         // Request this specific row
                     TxData[5] = 0x01;
-                    TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];
+                    // Zero out the rest
+                    for (int i = 6; i < 15; i++) TxData[i] = 0x00;
+                    
+                    // Calculate checksum
+                    TxData[15] = 0;
+                    for (int i = 1; i < 15; i++) TxData[15] += TxData[i];
                     if (TxData[15] == 0x17) TxData[15] = 0x18;
-                    TxData[16] = 0x17;
-                    TxData[17] = 0x17;
+                    
+                    TxData[16] = 0x17;     // back code
+                    TxData[17] = 0x17;     // back code
+                    
                     WriteHIDOutputReport();
                     std::memset(TxData, 0, sizeof(TxData));
 
@@ -413,7 +460,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 
         // Check for stalled progress
         if (reads == 150 && total_rows < 10) {
-            printf("\nProgress stalled, resending capture command...\n");
+            printf("\n==== PROGRESS STALLED - RESENDING CAPTURE COMMAND ====\n");
             m_TrimReader.Capture12(chan);
             WriteHIDOutputReport();
             std::memset(TxData, 0, sizeof(TxData));
@@ -426,16 +473,37 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 
     // Show capture results
-    printf("\nDirect capture complete - received %d/12 rows after %d reads\n", total_rows, reads);
+    printf("\n==== CAPTURE SUMMARY ====\n");
+    printf("Direct capture complete - received %d/12 rows after %d reads\n", total_rows, reads);
     printf("Rows received: ");
     for (int i = 0; i < 12; i++) {
         if (rows_received[i]) printf("%d ", i);
     }
     printf("\n");
 
+    // Show missing rows
+    printf("Missing rows: ");
+    for (int i = 0; i < 12; i++) {
+        if (!rows_received[i]) printf("%d ", i);
+    }
+    printf("\n");
+
+    // Check for pattern in missing rows
+    int even_count = 0, odd_count = 0;
+    for (int i = 0; i < 12; i += 2) {
+        if (rows_received[i]) even_count++;
+        if (i+1 < 12 && rows_received[i+1]) odd_count++;
+    }
+    printf("Received %d/6 even rows and %d/6 odd rows\n", even_count, odd_count);
+    
+    if (even_count == 0 && odd_count > 0)
+        printf("PATTERN DETECTED: Only odd rows are being received\n");
+    else if (odd_count == 0 && even_count > 0)
+        printf("PATTERN DETECTED: Only even rows are being received\n");
+
     // Fill in missing rows if needed
     if (total_rows < 12) {
-        printf("Filling in missing rows...\n");
+        printf("\n==== FILLING MISSING ROWS ====\n");
         for (int i = 0; i < 12; i++) {
             if (!rows_received[i]) {
                 // Find adjacent rows

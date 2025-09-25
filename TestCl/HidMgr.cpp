@@ -279,9 +279,20 @@ void CloseHandles() {
     g_DeviceDetected = false;
 }
 
-// Modify these functions to fix the buffer overflows
+// Add this helper function to print hex data
+void PrintHexData(const char* prefix, const uint8_t* data, int length) {
+    printf("%s: ", prefix);
+    for (int i = 0; i < length; i++) {
+        printf("%02X ", data[i]);
+        // Add a newline every 16 bytes for readability
+        if ((i + 1) % 16 == 0 && i < length - 1) {
+            printf("\n     ");
+        }
+    }
+    printf("\n");
+}
 
-// Enhanced version with better error handling
+// Enhanced version with debug output for transmitted data
 bool WriteHIDOutputReport(int length) {
     if (!DeviceHandle) return false;
 
@@ -293,6 +304,21 @@ bool WriteHIDOutputReport(int length) {
     std::memcpy(&OutputReport[1], TxData, std::min(static_cast<size_t>(TxNum),
         static_cast<size_t>(HIDREPORTNUM - 1)));
 
+    // Print the actual data being sent
+    printf("\n==== TRANSMITTING DATA PACKET ====\n");
+    PrintHexData("TX RAW", OutputReport, length);
+    printf("TX Command: 0x%02X\n", TxData[1]);
+    printf("TX Data Length: 0x%02X\n", TxData[2]);
+    printf("TX Packet Type: 0x%02X\n", TxData[3]);
+    if (length > 4) {
+        printf("TX Data: ");
+        for (int i = 4; i < std::min(15, length); i++) {
+            printf("0x%02X ", TxData[i]);
+        }
+        printf("\n");
+    }
+    printf("==== END TX PACKET ====\n\n");
+
     // Try multiple times in case of transient errors
     int max_retries = 3;
     int res = -1;
@@ -302,6 +328,7 @@ bool WriteHIDOutputReport(int length) {
 
         if (res >= 0) {
             // Success
+            printf("TX SUCCESS: Wrote %d bytes\n", res);
             break;
         }
 
@@ -320,7 +347,7 @@ bool WriteHIDOutputReport(int length) {
     return (res >= 0);
 }
 
-// Enhanced version with better buffer management
+// Enhanced version with debug output for received data
 bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
     if (!DeviceHandle) return false;
 
@@ -343,6 +370,40 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
             // Success - copy data with bounds checking
             std::memcpy(RxData, &InputReport[1], std::min(static_cast<size_t>(RxNum),
                 static_cast<size_t>(HIDREPORTNUM - 1)));
+
+            // Print the complete received data
+            printf("\n==== RECEIVED DATA PACKET ====\n");
+            PrintHexData("RX RAW", InputReport, result);
+            
+            // Extract and print important fields
+            uint8_t cmd = RxData[2];    // Command type
+            uint8_t type = RxData[4];   // Row type/frame format
+            uint8_t row = RxData[5];    // Row number
+
+            printf("RX Command: 0x%02X\n", cmd);
+            printf("RX Type/Row Type: 0x%02X\n", type);
+            printf("RX Row/Data: 0x%02X\n", row);
+            
+            // Print data payload based on packet format
+            if (cmd == 0x1c && type < 12) {
+                printf("RX Row %d Data: ", type);
+                // For 0x1c command, print the first few pixel values
+                for (int i = 0; i < 6; i++) {
+                    uint16_t pixel = (RxData[6 + i*2] << 8) | RxData[7 + i*2];
+                    printf("%d ", pixel);
+                }
+                printf("...\n");
+            }
+            else if (cmd == 0x02) {
+                printf("RX Legacy Format Data: ");
+                for (int i = 0; i < 6; i++) {
+                    printf("0x%02X ", RxData[6 + i]);
+                }
+                printf("...\n");
+            }
+            
+            printf("==== END RX PACKET ====\n\n");
+            
             return true;
         }
         else if (result < 0) {
@@ -361,13 +422,13 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
     return false;
 }
 
-// Fix the ReadHIDInputReport function
+// Enhanced ReadHIDInputReport with full data printing
 void ReadHIDInputReport() {
 #ifdef _WIN32
     // Windows implementation - same as before
     // ...
 #else
-    // Linux/non-Windows implementation - use hidapi directly
+    // Linux/non-Windows implementation with full data printing
     unsigned char buffer[HIDREPORTNUM] = { 0 };
     int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 1000);
 
@@ -375,11 +436,33 @@ void ReadHIDInputReport() {
         // Copy data from buffer to RxData (skipping report ID)
         std::memcpy(RxData, &buffer[1], std::min(static_cast<size_t>(RxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
 
+        // Print the complete received data
+        printf("\n==== RECEIVED DATA PACKET (STANDARD READ) ====\n");
+        PrintHexData("RX RAW", buffer, res);
+        
         // Extract command type and other info
         uint8_t cmd = RxData[2];  // Command type 
         uint8_t type = RxData[4]; // Row type
         uint8_t row = RxData[5];  // Row number
 
+        printf("RX Command: 0x%02X\n", cmd);
+        printf("RX Type/Row Type: 0x%02X\n", type);
+        printf("RX Row/Data: 0x%02X\n", row);
+        
+        // Print data payload based on packet format
+        if (cmd == 0x1c && type < 12) {
+            printf("RX Row %d Data: ", type);
+            // For 0x1c command, print the first few pixel values
+            for (int i = 0; i < 6; i++) {
+                uint16_t pixel = (RxData[6 + i*2] << 8) | RxData[7 + i*2];
+                printf("%d ", pixel);
+            }
+            printf("...\n");
+        }
+        
+        printf("==== END RX PACKET ====\n\n");
+
+        // Original processing logic
         printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd, type, row);
 
         // Process based on command type
