@@ -166,7 +166,7 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting USB protocol-aware capture for channel %d\n", chan);
+    printf("Starting enhanced USB protocol capture for channel %d\n", chan);
 
     // Initialize tracking arrays
     bool rows_received[12] = { false };
@@ -174,7 +174,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 
 #ifdef __linux__
     if (DeviceHandle) {
-        printf("Taking exclusive USB control with protocol analysis\n");
+        printf("Taking exclusive USB control\n");
         hid_set_nonblocking(DeviceHandle, 0);
         StopHidReadThread();
 
@@ -207,9 +207,9 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         }
     }
 
-    // Second pass: Get rows 2, 6, 10 with first bit pattern
+    // Second pass: Get rows 2, 6, 10 with bit pattern 1
     if (total_rows < 12) {
-        printf("Pass 2: Reading rows 2, 6, 10 with command variant 1\n");
+        printf("Pass 2: Reading rows 2, 6, 10\n");
         m_TrimReader.Capture12(chan);
         TxData[4] |= 0x80;  // Set bit 7
         WriteHIDOutputReport();
@@ -223,7 +223,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                 std::memcpy(RxData, &buffer[1], RxNum);
                 uint8_t row = RxData[4];
 
-                // If row is 1, 3, or 5 - interpret as 2, 6, or 10
+                // Map rows based on protocol pattern
                 if (row == 1 && !rows_received[2]) { row = 2; }
                 else if (row == 3 && !rows_received[6]) { row = 6; }
                 else if (row == 5 && !rows_received[10]) { row = 10; }
@@ -232,50 +232,32 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                     ProcessRowData();
                     rows_received[row] = true;
                     total_rows++;
-                    printf("Got row %d with command variant 1 (%d/12 rows)\n", row, total_rows);
+                    printf("Got row %d with variant 1 (%d/12 rows)\n", row, total_rows);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
     }
 
-    // Third pass: Get rows 4, 8 with second bit pattern
+    // Third pass: Modify command type for rows 4, 8
     if (total_rows < 12) {
-        printf("Pass 3: Reading rows 4, 8 with command variant 2\n");
-        m_TrimReader.Capture12(chan);
-        TxData[4] |= 0x40;  // Try bit 6 instead
-        WriteHIDOutputReport();
-        std::memset(TxData, 0, sizeof(TxData));
+        printf("Pass 3: Targeting rows 4, 8 with command type modification\n");
 
-        for (int i = 0; i < 10; i++) {
-            unsigned char buffer[HIDREPORTNUM];
-            int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+        // Use special command sequence for rows 4 and 8
+        TxData[0] = 0xaa;    // preamble code
+        TxData[1] = 0x01;    // command
+        TxData[2] = 0x03;    // data length
+        TxData[3] = 0x27;    // SPECIAL command type (0x27 instead of 0x26)
+        TxData[4] = chan;    // channel
+        TxData[5] = 0x00;
 
-            if (res > 0) {
-                std::memcpy(RxData, &buffer[1], RxNum);
-                uint8_t row = RxData[4];
-                printf("Raw row: %d\n", row);
+        // Calculate checksum
+        TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];
+        if (TxData[6] == 0x17) TxData[6] = 0x18;
 
-                // If row is 2 or 4 - interpret as 4 or 8
-                if (row == 2 && !rows_received[4]) { row = 4; }
-                else if (row == 4 && !rows_received[8]) { row = 8; }
+        TxData[7] = 0x17;    // back code
+        TxData[8] = 0x17;    // back code
 
-                if (row < 12 && !rows_received[row]) {
-                    ProcessRowData();
-                    rows_received[row] = true;
-                    total_rows++;
-                    printf("Got row %d with command variant 2 (%d/12 rows)\n", row, total_rows);
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-        }
-    }
-
-    // Fourth pass: Try a combination pattern for any remaining rows
-    if (total_rows < 12) {
-        printf("Pass 4: Final attempt for remaining rows\n");
-        m_TrimReader.Capture12(chan);
-        TxData[4] |= 0xC0;  // Try both bits 6 and 7
         WriteHIDOutputReport();
         std::memset(TxData, 0, sizeof(TxData));
 
@@ -287,12 +269,22 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                 std::memcpy(RxData, &buffer[1], RxNum);
                 uint8_t row = RxData[4];
 
-                if (row < 12 && !rows_received[row]) {
+                // Decode protocol for rows 4 and 8
+                if (row == 2 && !rows_received[4]) {
+                    row = 4;
                     ProcessRowData();
                     rows_received[row] = true;
                     total_rows++;
-                    printf("Got row %d with command variant 3 (%d/12 rows)\n", row, total_rows);
+                    printf("Got row %d with command type 0x27 (%d/12 rows)\n", row, total_rows);
                 }
+                else if (row == 4 && !rows_received[8]) {
+                    row = 8;
+                    ProcessRowData();
+                    rows_received[row] = true;
+                    total_rows++;
+                    printf("Got row %d with command type 0x27 (%d/12 rows)\n", row, total_rows);
+                }
+
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
@@ -308,7 +300,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
 #endif
 
     // Final report
-    printf("USB protocol analysis complete - received %d/12 rows\n", total_rows);
+    printf("Protocol capture complete - received %d/12 rows\n", total_rows);
     if (total_rows < 12) {
         printf("Missing rows:");
         for (int i = 0; i < 12; i++) {
