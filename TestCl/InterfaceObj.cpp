@@ -1,6 +1,7 @@
 // Copyright 2014-2023, Anitoa Systems, LLC
 // All rights reserved
 
+// Add at the top of the file
 #include "InterfaceObj.h"
 #include "HidMgr.h"
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <thread>
 #include <chrono>
 #include <filesystem>
+#include <vector>   // Make sure this is included
 
 namespace fs = std::filesystem;
 
@@ -147,83 +149,103 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting Windows-compatible capture for channel %d\n", chan);
+    printf("Starting capture for channel %d with improved reliability\n", chan);
 
-    // Initialize for proper row tracking without interpolation
+    // Initialize tracking for each row
     bool rows_received[12] = { false };
     int total_rows = 0;
+    const int MAX_RETRIES = 3;
+    int retry_count = 0;
 
 #ifdef __linux__
     if (DeviceHandle) {
         printf("Taking exclusive USB control\n");
-        hid_set_nonblocking(DeviceHandle, 0);
+        hid_set_nonblocking(DeviceHandle, 0);  // Switch to blocking mode for reliability
         StopHidReadThread();
 
+        // Flush any pending data
         unsigned char flush_buffer[HIDREPORTNUM];
-        while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 5) > 0);
+        while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 5) > 0) {
+            printf("Flushing existing data\n");
+        }
     }
 #endif
 
-    // Make sure chan_num is set correctly before sending the command
-    chan_num = chan;
+    while (retry_count < MAX_RETRIES && total_rows < 12) {
+        // Reset row tracking for this attempt if it's a retry
+        if (retry_count > 0) {
+            printf("\nAttempt %d of %d to capture missing rows...\n", retry_count + 1, MAX_RETRIES);
+            memset(rows_received, false, sizeof(rows_received));
+            total_rows = 0;
+        }
 
-    // Issue capture command
-    printf("Sending capture command\n");
-    m_TrimReader.Capture12(chan);
-    WriteHIDOutputReport();
-    std::memset(TxData, 0, sizeof(TxData));
+        // Set channel and issue capture command
+        chan_num = chan;
+        printf("Sending capture command\n");
+        m_TrimReader.Capture12(chan);
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
 
-    // Set continue flag for capture loop
-    Continue_Flag = true;
+        // Set continue flag for capture loop
+        Continue_Flag = true;
 
-    // Main capture loop
-    printf("Reading rows in Windows-compatible mode...\n");
+        // Main capture loop
+        printf("Reading rows...\n");
 
-    const int MAX_READS = 100;  // Safety limit to prevent infinite loops
-    int reads = 0;
+        const int MAX_READS = 100;  // Safety limit
+        int reads = 0;
 
-    while (Continue_Flag && reads < MAX_READS) {
-        ReadHIDInputReport();
+        while (Continue_Flag && reads < MAX_READS && total_rows < 12) {
+            // Use timeout-based read for reliability
+            bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 500);  // 500ms timeout
 
-        // Check if we got valid data
-        uint8_t cmd_type = RxData[2];  // Command type from device
-        uint8_t row_type = RxData[4];  // Row type from device
-        uint8_t row = RxData[5];       // Row number
-
-        // Check for end signal
-        if ((row == 0x0b) || (row == 0xf1)) {
-            printf("Received end signal (0x%02x)\n", row);
-            Continue_Flag = false;
-            if (row == 0xf1) {
-                printf("Error code 0xF1: Sensor communication timeout\n");
+            if (!success) {
+                printf("No data received within timeout period\n");
+                continue;
             }
+
+            // Check if we got valid data
+            uint8_t cmd_type = RxData[2];  // Command type
+            uint8_t row_type = RxData[4];  // Row type
+            uint8_t row = RxData[5];       // Row number
+
+            // Check for end signal
+            if (row == 0x0b || row == 0xf1) {
+                printf("Received end signal (0x%02x)\n", row);
+                Continue_Flag = false;
+                break;
+            }
+
+            // Update channel from response if needed
+            if ((row_type & 0xF0) > 0) {
+                chan_num = ((row_type & 0xF0) >> 4) + 1;
+            }
+
+            // Process the data
+            ProcessRowData();
+
+            // Track the rows we've received (only if valid row number)
+            if (row < 12) {
+                if (!rows_received[row]) {
+                    rows_received[row] = true;
+                    total_rows++;
+                    printf("Got row %d (%d/12 total)\n", row, total_rows);
+                }
+            }
+
+            // Clear RxData for next read
+            std::memset(RxData, 0, sizeof(RxData));
+            reads++;
+        }
+
+        // If we have all rows, break out
+        if (total_rows == 12) {
+            printf("Successfully captured all 12 rows!\n");
             break;
         }
 
-        // Update channel number from response if needed
-        if ((row_type & 0xF0) > 0) {
-            chan_num = ((row_type & 0xF0) >> 4) + 1;
-        }
-
-        // Process the data
-        ProcessRowData();
-
-        // Track the rows we've received
-        if (row < 12 && !rows_received[row]) {
-            rows_received[row] = true;
-            total_rows++;
-            printf("Got row %d (%d/12 total)\n", row, total_rows);
-        }
-
-        // Clear RxData for next read
-        std::memset(RxData, 0, sizeof(RxData));
-        reads++;
-    }
-
-    // Handle timeout case
-    if (reads >= MAX_READS) {
-        printf("WARNING: Maximum read attempts reached, forcing capture to end\n");
-        Continue_Flag = false;
+        // Otherwise, prepare for retry
+        retry_count++;
     }
 
 #ifdef __linux__
@@ -235,7 +257,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Report capture results
+    // Report final capture results
     printf("\nCapture complete - received %d/12 rows\n", total_rows);
 
     if (total_rows < 12) {
@@ -244,10 +266,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             if (!rows_received[i]) printf(" %d", i);
         }
         printf("\n");
-        printf("WARNING: Incomplete data captured. No interpolation performed.\n");
-    }
-    else {
-        printf("SUCCESS! All 12 rows received directly from device.\n");
+        printf("WARNING: Incomplete data captured.\n");
     }
 
     return (total_rows == 12) ? 0 : 1;  // Return success only if we got all rows

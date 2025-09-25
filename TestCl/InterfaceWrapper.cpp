@@ -46,25 +46,57 @@ extern "C" {
         theInterfaceObject.SelSensor(chan);
     }
 
-    // Frame capture with retries for improved reliability
     EXPORT void get(int chan) {
-        // Try multiple times if needed
-        for (int attempts = 0; attempts < 3; attempts++) {
-            theInterfaceObject.CaptureFrame12(chan);
+        const int MAX_ATTEMPTS = 5;  // Increase retry count
+        bool success = false;
 
-            // Check if data looks valid
+        printf("Starting capture with up to %d attempts\n", MAX_ATTEMPTS);
+
+        for (int attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
+            printf("Attempt %d of %d\n", attempts + 1, MAX_ATTEMPTS);
+
+            // Call CaptureFrame12 with potential retries inside
+            int result = theInterfaceObject.CaptureFrame12(chan);
+
+            // Check if capture was successful (all 12 rows)
+            if (result == 0) {
+                printf("Capture successful on attempt %d\n", attempts + 1);
+                success = true;
+                break;
+            }
+
+            // Check if data looks valid even if not all rows were received
             bool hasGaps = false;
-            for (int i = 1; i < 12; i += 2) {
-                if (theInterfaceObject.frame_data[0][i] == 0) {
-                    hasGaps = true;
-                    break;
+            int nonZeroCount = 0;
+
+            for (int i = 0; i < 12; i++) {
+                for (int j = 0; j < 12; j++) {
+                    if (theInterfaceObject.frame_data[i][j] != 0) {
+                        nonZeroCount++;
+                    }
                 }
             }
 
-            if (!hasGaps) break;
+            printf("Frame has %d non-zero values out of 144\n", nonZeroCount);
 
-            // Small delay between retries
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            // If we have a mostly complete frame, we can break
+            if (nonZeroCount > 100) {  // Accept if >70% of values are non-zero
+                printf("Frame has sufficient data, proceeding\n");
+                success = true;
+                break;
+            }
+
+            // Delay between retries, increasing with each attempt
+            std::this_thread::sleep_for(std::chrono::milliseconds(50 * (attempts + 1)));
+
+            // Optional: Reset USB endpoints between attempts
+            if (attempts > 0) {
+                reset_usb_endpoints();
+            }
+        }
+
+        if (!success) {
+            printf("WARNING: Failed to capture a complete frame after %d attempts\n", MAX_ATTEMPTS);
         }
     }
 
