@@ -1,9 +1,11 @@
 #pragma once
 
 #include <hidapi/hidapi.h>
+#include <vector>   // Missing include for std::vector
+#include <cstdint>  // For uint8_t
 
 // Constants for HID communication
-#define HIDREPORTNUM 64
+#define HIDREPORTNUM 65   // Increase to 65 to avoid buffer overflow (64 + 1 report ID)
 #define RxNum 64
 #define TxNum 64
 
@@ -45,7 +47,7 @@ public:
 bool FindTheHID();
 void CloseHandles();
 
-// SINGLE WriteHIDOutputReport function with default parameter - fixes ambiguity
+// SINGLE WriteHIDOutputReport function with default parameter
 bool WriteHIDOutputReport(int length = HIDREPORTNUM);
 
 // Read operations
