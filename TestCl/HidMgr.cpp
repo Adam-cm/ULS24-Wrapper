@@ -85,30 +85,46 @@ static void HidReadThreadFunc() {
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) == 0) {
         printf("HID thread using real-time scheduling\n");
     }
+
+    // Increase read aggressiveness on Linux
+    int missed = 0;
+    const int max_consec_missed = 3;
 #endif
 
     while (hid_read_thread_running) {
-        // Use shorter timeout for maximum throughput (0ms = non-blocking)
+        // Use minimal timeout for maximum throughput
         int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 0);
         if (res > 0) {
-            // Reuse pre-allocated vector with copy
+            // Got data - process it
             report.assign(InputReport + 1, InputReport + 1 + RxNum);
 
-            // Use lock with minimal scope
+            // Store in buffer with minimal lock time
             {
                 std::lock_guard<std::mutex> lock(hid_buffer_mutex);
                 if (!hid_report_buffer.push(std::move(report))) {
-                    // Buffer full - very unlikely with 512-entry buffer
                     fprintf(stderr, "Warning: HID buffer overflow!\n");
                 }
-                // Allocate new vector since we moved the old one
-                report = std::vector<uint8_t>(RxNum);
+                report = std::vector<uint8_t>(RxNum); // New buffer after move
             }
             hid_buffer_cv.notify_one();
-        }
 
-        // Minimal sleep - just enough to prevent CPU maxing out
-        std::this_thread::sleep_for(std::chrono::microseconds(50)); // 50µs instead of 100µs
+#ifdef __linux__
+            missed = 0; // Reset missed counter when we get data
+#endif
+        }
+        else {
+#ifdef __linux__
+            // On Linux, adjust sleep based on whether we're getting data
+            if (++missed > max_consec_missed) {
+                // Only sleep if we've had several empty reads in a row
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+                missed = max_consec_missed;
+            }
+#else
+            // On other platforms, use a fixed sleep
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+#endif
+        }
     }
 }
 
@@ -167,42 +183,39 @@ bool FindTheHID()
         std::printf("Device found!\n");
 
 #ifdef __linux__
-        // HIDAPI doesn't expose hid_get_fd publicly, so we need to find the device manually
-        std::string hidraw_path;
+        // HIDAPI doesn't expose buffer size control directly
+        // Instead, modify our internal buffer and read strategy
+
+        // 1. Increase our internal circular buffer size
+        std::printf("Using %d-entry circular buffer (%d KB)\n",
+            CIRCULAR_BUFFER_SIZE,
+            (CIRCULAR_BUFFER_SIZE * RxNum) / 1024);
+
+        // 2. Find the hidraw path for diagnostics
         struct hid_device_info* devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
         if (devs) {
-            // The path will be something like /dev/hidraw0
-            hidraw_path = devs->path;
+            std::string path = devs->path;
             hid_free_enumeration(devs);
 
-            // Extract just the device name from the path
-            size_t pos = hidraw_path.rfind('/');
-            if (pos != std::string::npos) {
-                hidraw_path = "/dev/" + hidraw_path.substr(pos + 1);
-                printf("Found HID device at: %s\n", hidraw_path.c_str());
+            std::printf("Device path: %s\n", path.c_str());
 
-                // Open the device directly for ioctl
-                int fd = open(hidraw_path.c_str(), O_RDWR);
-                if (fd >= 0) {
-                    // Try to set buffer size to 16KB
-                    int buf_size = 16384;
-                    if (ioctl(fd, HIDIOCSREPORT, &buf_size) < 0) {
-                        printf("Failed to increase HID buffer size: %s\n", strerror(errno));
-                    }
-                    else {
-                        printf("Increased HID buffer size to %d bytes\n", buf_size);
-                    }
-                    close(fd);
-                }
-                else {
-                    printf("Could not open %s for ioctl: %s\n",
-                        hidraw_path.c_str(), strerror(errno));
-                }
+            // Extract hidraw device name
+            size_t pos = path.rfind('/');
+            if (pos != std::string::npos) {
+                std::string hidraw = path.substr(pos + 1);
+                std::printf("HID device: %s\n", hidraw.c_str());
+
+                // Print diagnostic info about the device
+                std::printf("For maximum performance, you can create a udev rule:\n");
+                std::printf("echo 'KERNEL==\"%s\", ATTR{power/control}=\"on\", "
+                    "ATTR{device/power/wakeup}=\"enabled\"' > "
+                    "/etc/udev/rules.d/99-hidraw-performance.rules\n",
+                    hidraw.c_str());
             }
         }
 #endif
 
-        // Set non-blocking mode
+        // Set non-blocking mode for maximum throughput
         hid_set_nonblocking(DeviceHandle, 1);
 
         // Start the read thread
