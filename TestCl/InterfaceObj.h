@@ -6,7 +6,7 @@
 // Add this include for DirectUSB functionality
 #include "DirectUSB.h"
 
-// Define max image size if not already defined
+// Make sure MAX_IMAGE_SIZE is defined and matches TrimReader's expectation
 #define MAX_IMAGE_SIZE 12
 
 class CInterfaceObject
@@ -19,7 +19,7 @@ public:
     CInterfaceObject();
     ~CInterfaceObject() = default;
 
-    // Frame data storage
+    // Frame data storage - using uint16_t to match the values we're storing
     uint16_t frame_data[MAX_IMAGE_SIZE][MAX_IMAGE_SIZE];
 
     // Functions

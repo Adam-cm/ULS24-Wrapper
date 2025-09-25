@@ -225,7 +225,25 @@ void CInterfaceObject::ProcessRowData()
     }
     else {
         // Use the original ProcessRowData for other command types
-        frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
+        // Create a temporary buffer of the correct type for TrimReader
+        int temp_frame_data[MAX_IMAGE_SIZE][24] = {0};
+        
+        // Copy our frame data to the temporary buffer
+        for (int i = 0; i < MAX_IMAGE_SIZE; i++) {
+            for (int j = 0; j < MAX_IMAGE_SIZE; j++) {
+                temp_frame_data[i][j] = frame_data[i][j];
+            }
+        }
+        
+        // Call the TrimReader's ProcessRowData with the correct type
+        frame_size = m_TrimReader.ProcessRowData(temp_frame_data, gain_mode);
+        
+        // Copy the processed data back to our frame data array
+        for (int i = 0; i < MAX_IMAGE_SIZE; i++) {
+            for (int j = 0; j < MAX_IMAGE_SIZE; j++) {
+                frame_data[i][j] = temp_frame_data[i][j];
+            }
+        }
     }
 }
 

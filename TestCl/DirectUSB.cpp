@@ -1,4 +1,5 @@
 #include "DirectUSB.h"
+#include <cstring>  // Add this for std::memcpy
 #include <cstdio>
 #include <chrono>
 
