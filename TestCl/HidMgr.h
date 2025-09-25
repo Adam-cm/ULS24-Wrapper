@@ -56,6 +56,9 @@ struct CircularBuffer {
 // Global device handle
 extern hid_device* DeviceHandle;
 
+// Near the top of the file, with other extern declarations
+extern int chan_num;  // The current channel number being processed
+
 // HID device management
 bool FindTheHID();
 void CloseHandles();

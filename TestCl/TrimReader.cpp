@@ -803,60 +803,50 @@ void CTrimReader::SelSensor(uint8_t i)
 
 int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
 {
-	static bool rows_received[24] = { 0 };
-	static int rows_expected = 12; // or 24 for 24x24
-
 	int result;
-	int flag;
+	int flag, ncol = 12;
 	int FrameSize = 0;
 
-	uint8_t type = RxData[3];
+	// Get the data type from the correct location in RxData
+	uint8_t type = RxData[4];    // data type
 
+	// Determine frame size based on data type
 	switch (type)
 	{
-	case dppage12:
+	case dppage12:        // 12x12 frame
+		ncol = 12;
 		FrameSize = 0;
-		rows_expected = 12;
 		break;
-	case dppage24:
+
+	case dppage24:        // 24x24 frame
+		ncol = 24;
 		FrameSize = 1;
-		rows_expected = 24;
 		break;
+
 	default:
-		return FrameSize; // Early exit if type is not recognized
+		break;
 	}
 
-	unsigned int rn = RxData[4];
+	// In the Windows version, the row number is in RxData[5]
+	unsigned int rn = RxData[5];
 
-	// Bounds check for row
-	if (rn >= (unsigned int)rows_expected)
-		return FrameSize;
+	// Process each column for this row
+	for (int i = 0; i < ncol; i++)
+	{
+		// Windows code uses data stride of 2 with low byte first, high byte second
+		// The data starts at offset 6
+		result = ADCCorrectioni(i, RxData[i * 2 + 7], RxData[i * 2 + 6], ncol, chan_num, gain_mode, &flag);
 
-	// Only process 12 columns for 12-column data
-	int ncol = (FrameSize == 0) ? 12 : 24;
-	int pixel_offset = 5; // instead of 8
-
-	for (int i = 0; i < ncol; i++) {
-		uint8_t low = RxData[pixel_offset + i * 2];
-		uint8_t high = RxData[pixel_offset + i * 2 + 1];
-		result = ADCCorrectioni(i, high, low, ncol, chan_num, gain_mode, &flag);
+		// Store the result in the data array
 		adc_data[rn][i] = result;
+
+		// Ensure no negative values
+		if (adc_data[rn][i] < 0) adc_data[rn][i] = 0;
 	}
 
-	rows_received[rn] = true;
-
-	// Check if all rows have been received
-	bool all_received = true;
-	for (int i = 0; i < rows_expected; ++i) {
-		if (!rows_received[i]) {
-			all_received = false;
-			break;
-		}
-	}
-	if (all_received) {
+	// Check for end signal (0x0b) which would terminate the capture
+	if (rn == 0x0b) {
 		Continue_Flag = false;
-		// Reset for next frame
-		memset(rows_received, 0, sizeof(rows_received));
 	}
 
 	return FrameSize;
