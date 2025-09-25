@@ -50,4 +50,7 @@ public:
 
     int IsDeviceDetected(); // 0: Device not detected; 1: device detected
     std::string GetChipName(); // Get the name of the chip embedded in trim.dat file
+
+    // Add to public section
+    int WindowsStyleCapture12(uint8_t chan);
 };

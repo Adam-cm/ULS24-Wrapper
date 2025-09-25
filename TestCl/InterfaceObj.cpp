@@ -231,261 +231,8 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting multi-mode capture for channel %d\n", chan);
-    
-    // DEBUG: Print capture parameters
-    printf("Capture parameters: Channel=%d, Gain=%d, IntTime=%.2f\n", 
-           chan, gain_mode, int_time);
-
-    // Initialize tracking for each row
-    bool rows_received[12] = { false };
-    int total_rows = 0;
-
-#ifdef __linux__
-    if (DeviceHandle) {
-        printf("Taking exclusive USB control\n");
-        hid_set_nonblocking(DeviceHandle, 0);  // Switch to blocking mode
-        StopHidReadThread();
-
-        // More aggressive flush of pending data
-        unsigned char flush_buffer[HIDREPORTNUM];
-        int flush_count = 0;
-        while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 1) > 0) {
-            flush_count++;
-            if (flush_count > 100) break;  // Prevent infinite loop
-        }
-        if (flush_count > 0) {
-            printf("Flushed %d packets of stale data\n", flush_count);
-        }
-
-        // Give device time to stabilize with longer delay
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-#endif
-
-    // Initialize frame data to zero
-    for (int i = 0; i < MAX_IMAGE_SIZE; i++) {
-        for (int j = 0; j < MAX_IMAGE_SIZE; j++) {
-            frame_data[i][j] = 0;
-        }
-    }
-
-    // We'll try multiple capture approaches
-    const int NUM_APPROACHES = 4;
-    uint8_t packet_types[NUM_APPROACHES] = { 0x02, 0x12, 0x22, 0x32 };
-    
-    for (int approach = 0; approach < NUM_APPROACHES; approach++) {
-        printf("\n==== TRYING CAPTURE APPROACH %d (PACKET TYPE 0x%02X) ====\n", 
-               approach + 1, packet_types[approach]);
-        
-        // Clear any pending input before sending command
-        std::memset(RxData, 0, sizeof(RxData));
-
-        // Send capture command with the current packet type
-        TxData[0] = 0xaa;      // preamble code
-        TxData[1] = 0x02;      // command
-        TxData[2] = 0x0C;      // data length
-        TxData[3] = ((chan-1) << 4) | packet_types[approach];  // Try different packet types
-        TxData[4] = 0xff;      // request all rows
-        TxData[5] = 0x00;
-        
-        // Zero out the rest
-        for (int i = 6; i < 15; i++) TxData[i] = 0x00;
-        
-        // Calculate checksum
-        TxData[15] = 0;
-        for (int i = 1; i <= 14; i++) {
-            TxData[15] += TxData[i];
-        }
-        if (TxData[15] == 0x17) 
-            TxData[15] = 0x18;
-        
-        TxData[16] = 0x17;     // back code
-        TxData[17] = 0x17;     // back code
-        
-        // Send command
-        WriteHIDOutputReport();
-        std::memset(TxData, 0, sizeof(TxData));
-
-        // Wait for device to start processing the command
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        // Set continue flag for capture loop
-        Continue_Flag = true;
-        int consecutive_timeouts = 0;
-        const int MAX_CONSECUTIVE_TIMEOUTS = 8;
-        
-        // Row capture loop 
-        const int MAX_READS_PER_APPROACH = 50;
-        int reads = 0;
-        int new_rows_this_approach = 0;
-        
-        printf("Reading rows using packet type 0x%02X...\n", packet_types[approach]);
-
-        while (Continue_Flag && reads < MAX_READS_PER_APPROACH && total_rows < 12) {
-            // Enhanced read with better error reporting
-            bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 150);
-
-            if (!success) {
-                consecutive_timeouts++;
-                if (consecutive_timeouts > MAX_CONSECUTIVE_TIMEOUTS) {
-                    printf("Breaking after %d consecutive timeouts\n", consecutive_timeouts);
-                    break;
-                }
-                printf("No data received (timeout %d/%d)\n", consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS);
-                continue;
-            }
-
-            // Reset timeout counter when we get data
-            consecutive_timeouts = 0;
-
-            // Extract packet information 
-            uint8_t cmd_type = RxData[2];
-            uint8_t row_type = RxData[4];
-            uint8_t row = RxData[5];
-
-            // Process data
-            if (cmd_type == 0x1c) {
-                int actual_row = row_type;
-
-                if (actual_row >= 0 && actual_row < 12) {
-                    ProcessRowData();
-
-                    // Track new rows
-                    if (!rows_received[actual_row]) {
-                        rows_received[actual_row] = true;
-                        total_rows++;
-                        new_rows_this_approach++;
-                        printf("Got row %d (%d/12 total) - %s row [approach %d]\n", 
-                            actual_row, total_rows, 
-                            (actual_row % 2 == 0) ? "EVEN" : "ODD",
-                            approach + 1);
-                    }
-                    else {
-                        printf("Duplicate row %d\n", actual_row);
-                    }
-                }
-            }
-            else if (cmd_type == 0x02) {
-                // Legacy format - extract row from a different field
-                uint8_t frameFormat = row_type & 0x0F;
-
-                if ((frameFormat == 0x02 || frameFormat == 0x22) && row < 12) {
-                    printf("Processing legacy format data packet\n");
-                    ProcessRowData();
-
-                    if (!rows_received[row]) {
-                        rows_received[row] = true;
-                        total_rows++;
-                        new_rows_this_approach++;
-                        printf("Got row %d from legacy format (%d/12 total) - %s row\n", 
-                            row, total_rows, 
-                            (row % 2 == 0) ? "EVEN" : "ODD");
-                    }
-                }
-            }
-            else if (cmd_type == 0x01) {
-                printf("Command acknowledgement received\n");
-            }
-
-            // Clear RxData after processing
-            std::memset(RxData, 0, sizeof(RxData));
-            reads++;
-        }
-        
-        printf("\nApproach %d results: %d new rows received (total: %d/12)\n", 
-               approach + 1, new_rows_this_approach, total_rows);
-        
-        // Show which rows we have so far
-        printf("Rows received so far: ");
-        for (int i = 0; i < 12; i++) {
-            if (rows_received[i]) printf("%d ", i);
-        }
-        printf("\n");
-        
-        // If we have all rows, no need to try other approaches
-        if (total_rows == 12) {
-            printf("All rows received, no need to try additional capture approaches\n");
-            break;
-        }
-        
-        // Wait between approaches
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-
-    // Final report
-    printf("\n==== CAPTURE SUMMARY ====\n");
-    printf("Final result: received %d/12 rows\n", total_rows);
-    printf("Rows received: ");
-    for (int i = 0; i < 12; i++) {
-        if (rows_received[i]) printf("%d ", i);
-    }
-    printf("\n");
-
-    // Show missing rows
-    printf("Missing rows: ");
-    for (int i = 0; i < 12; i++) {
-        if (!rows_received[i]) printf("%d ", i);
-    }
-    printf("\n");
-
-    // Check for pattern in missing rows
-    int even_count = 0, odd_count = 0;
-    for (int i = 0; i < 12; i += 2) {
-        if (rows_received[i]) even_count++;
-        if (i+1 < 12 && rows_received[i+1]) odd_count++;
-    }
-    printf("Received %d/6 even rows and %d/6 odd rows\n", even_count, odd_count);
-
-    // Fill in missing rows if needed
-    if (total_rows < 12) {
-        printf("\n==== FILLING MISSING ROWS ====\n");
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) {
-                // Find adjacent rows
-                int prev = i - 1;
-                while (prev >= 0 && !rows_received[prev]) prev--;
-
-                int next = i + 1;
-                while (next < 12 && !rows_received[next]) next++;
-
-                if (prev >= 0 && next < 12 && rows_received[prev] && rows_received[next]) {
-                    printf("Interpolating row %d between rows %d and %d\n", i, prev, next);
-                    // Weighted average interpolation
-                    float prev_weight = (float)(next - i) / (next - prev);
-                    float next_weight = (float)(i - prev) / (next - prev);
-
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = (int)(prev_weight * frame_data[prev][j] +
-                            next_weight * frame_data[next][j]);
-                    }
-                }
-                else if (prev >= 0 && rows_received[prev]) {
-                    printf("Copying from previous row %d to %d\n", prev, i);
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = frame_data[prev][j];
-                    }
-                }
-                else if (next < 12 && rows_received[next]) {
-                    printf("Copying from next row %d to %d\n", next, i);
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = frame_data[next][j];
-                    }
-                }
-            }
-        }
-    }
-
-#ifdef __linux__
-    // Restore thread-based reader
-    if (DeviceHandle) {
-        printf("Restoring standard USB access mode\n");
-        hid_set_nonblocking(DeviceHandle, 1);
-        StartHidReadThread();
-    }
-#endif
-
-    return 0;  // Return success
+    // Simply call the Windows-compatible version
+    return WindowsStyleCapture12(chan);
 }
 
 int CInterfaceObject::CaptureFrame24()
@@ -613,4 +360,235 @@ void CInterfaceObject::CompleteCapture12(uint8_t chan)
 
     printf("\n==== SENDING COMPLETE FRAME REQUEST (ALL ROWS) ====\n");
     printf("Using packet type 0x12 instead of 0x02\n");
+}
+
+// Add this function to directly copy the Windows implementation approach
+int CInterfaceObject::WindowsStyleCapture12(uint8_t chan)
+{
+    printf("Starting Windows-compatible capture for channel %d\n", chan);
+    
+    // Print capture parameters
+    printf("Capture parameters: Channel=%d, Gain=%d, IntTime=%.2f\n", 
+           chan, gain_mode, int_time);
+
+    // Initialize tracking for each row
+    bool rows_received[12] = { false };
+    int total_rows = 0;
+    
+    // Initialize frame data to zero
+    for (int i = 0; i < MAX_IMAGE_SIZE; i++) {
+        for (int j = 0; j < MAX_IMAGE_SIZE; j++) {
+            frame_data[i][j] = 0;
+        }
+    }
+
+#ifdef __linux__
+    if (DeviceHandle) {
+        printf("Taking exclusive USB control with Windows-compatible mode\n");
+        
+        // Stop the read thread to ensure direct control
+        StopHidReadThread();
+        
+        // Set to blocking mode with longer timeout
+        hid_set_nonblocking(DeviceHandle, 0);
+
+        // More aggressive flush of pending data
+        unsigned char flush_buffer[HIDREPORTNUM];
+        int flush_count = 0;
+        while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 1) > 0) {
+            flush_count++;
+            if (flush_count > 100) break;
+        }
+        if (flush_count > 0) {
+            printf("Flushed %d packets of stale data\n", flush_count);
+        }
+        
+        // Wait for device to stabilize
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+#endif
+
+    // Clear RxData before starting
+    std::memset(RxData, 0, sizeof(RxData));
+
+    // Prepare the exact same command as Windows version
+    printf("\n==== SENDING WINDOWS-COMPATIBLE CAPTURE COMMAND ====\n");
+    
+    // Format command exactly like Windows (verified from logs)
+    TxData[0] = 0xaa;      // preamble code
+    TxData[1] = 0x02;      // command
+    TxData[2] = 0x0C;      // data length
+    TxData[3] = ((chan-1) << 4) | 0x02;  // Standard format used in Windows
+    TxData[4] = 0xff;      // request all rows (Windows uses this value)
+    TxData[5] = 0x00;
+    TxData[6] = 0x00;
+    TxData[7] = 0x00;
+    TxData[8] = 0x00;
+    TxData[9] = 0x00;
+    TxData[10] = 0x00;
+    TxData[11] = 0x00;
+    TxData[12] = 0x00;
+    TxData[13] = 0x00;
+    TxData[14] = 0x00;
+    
+    // Calculate checksum (same as Windows)
+    TxData[15] = 0;
+    for (int i = 1; i <= 14; i++) {
+        TxData[15] += TxData[i];
+    }
+    if (TxData[15] == 0x17) 
+        TxData[15] = 0x18;
+    
+    TxData[16] = 0x17;     // back code
+    TxData[17] = 0x17;     // back code
+
+    // Print the command for verification
+    printf("Sending command: ");
+    for (int i = 0; i < 18; i++) {
+        printf("%02X ", TxData[i]);
+    }
+    printf("\n");
+    
+    // Send command with forced flush and timing
+    bool sent = WriteHIDOutputReport();
+    if (!sent) {
+        printf("Failed to send capture command\n");
+    }
+    std::memset(TxData, 0, sizeof(TxData));
+
+    // Wait for device to process - longer wait like Windows does
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Row capture loop with Windows-compatible timing
+    printf("Reading rows with Windows-compatible timing...\n");
+    
+    // In Windows, rows come in without any special requests
+    // Wait for each row with appropriate timeout
+    int expected_rows = 12;
+    int max_attempts = 50; // Higher than needed to ensure we don't miss data
+    
+    for (int attempt = 0; attempt < max_attempts && total_rows < expected_rows; attempt++) {
+        // Each read has its own timeout like Windows
+        unsigned char buffer[HIDREPORTNUM] = { 0 };
+        int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 250); // longer timeout
+        
+        if (res > 0) {
+            // Copy the data from buffer to RxData
+            std::memcpy(RxData, &buffer[1], std::min(static_cast<size_t>(RxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
+            
+            // Print the received data
+            printf("Received packet: ");
+            for (int i = 0; i < 10; i++) { // Just print first 10 bytes
+                printf("%02X ", buffer[i]);
+            }
+            printf("...\n");
+            
+            // Process the data based on the format in Windows logs
+            uint8_t cmd_type = RxData[2];
+            uint8_t row_type = RxData[4];
+            uint8_t row_idx = RxData[5]; // In Windows format, row index is here
+            
+            if (cmd_type == 0x1c || cmd_type == 0x02) {
+                // Windows format rows
+                int row = row_idx;
+                
+                if (row >= 0 && row < 12) {
+                    // Process the data like Windows does
+                    for (int i = 0; i < 12; i++) {
+                        // Windows format - data starts at offset 6
+                        uint8_t high_byte = RxData[6 + i * 2];
+                        uint8_t low_byte = RxData[7 + i * 2];
+                        
+                        // Combine into a 16-bit value
+                        uint16_t value = (high_byte << 8) | low_byte;
+                        
+                        // Store in frame data
+                        frame_data[row][i] = value;
+                    }
+                    
+                    // Track new row
+                    if (!rows_received[row]) {
+                        rows_received[row] = true;
+                        total_rows++;
+                        printf("Got row %d (%d/12 total) with values: %d %d %d ...\n", 
+                               row, total_rows, 
+                               frame_data[row][0], frame_data[row][1], frame_data[row][2]);
+                    } else {
+                        printf("Duplicate row %d\n", row);
+                    }
+                }
+            }
+            
+            // Clear RxData for next read
+            std::memset(RxData, 0, sizeof(RxData));
+            
+            // Reset attempt counter when we get data
+            attempt = 0;
+        } else {
+            // No data received - wait a bit like Windows does
+            printf("No data on attempt %d\n", attempt);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+
+    // Report results
+    printf("\n==== WINDOWS-COMPATIBLE CAPTURE COMPLETE ====\n");
+    printf("Received %d/12 rows\n", total_rows);
+    
+    // Print which rows we got
+    printf("Rows received: ");
+    for (int i = 0; i < 12; i++) {
+        if (rows_received[i]) printf("%d ", i);
+    }
+    printf("\n");
+    
+    // Fill in any missing rows
+    if (total_rows < 12) {
+        printf("\n==== FILLING MISSING ROWS ====\n");
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) {
+                // Find adjacent rows
+                int prev = i - 1;
+                while (prev >= 0 && !rows_received[prev]) prev--;
+
+                int next = i + 1;
+                while (next < 12 && !rows_received[next]) next++;
+
+                if (prev >= 0 && next < 12 && rows_received[prev] && rows_received[next]) {
+                    printf("Interpolating row %d between rows %d and %d\n", i, prev, next);
+                    // Weighted average interpolation
+                    float prev_weight = (float)(next - i) / (next - prev);
+                    float next_weight = (float)(i - prev) / (next - prev);
+
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = (int)(prev_weight * frame_data[prev][j] +
+                            next_weight * frame_data[next][j]);
+                    }
+                }
+                else if (prev >= 0 && rows_received[prev]) {
+                    printf("Copying from previous row %d to %d\n", prev, i);
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = frame_data[prev][j];
+                    }
+                }
+                else if (next < 12 && rows_received[next]) {
+                    printf("Copying from next row %d to %d\n", next, i);
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = frame_data[next][j];
+                    }
+                }
+            }
+        }
+    }
+
+#ifdef __linux__
+    // Restore thread-based reader
+    if (DeviceHandle) {
+        printf("Restoring standard USB access mode\n");
+        hid_set_nonblocking(DeviceHandle, 1);
+        StartHidReadThread();
+    }
+#endif
+
+    return 0;
 }
