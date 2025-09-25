@@ -281,38 +281,83 @@ void CloseHandles() {
 
 // Modify these functions to fix the buffer overflows
 
-// Write HID output report - single implementation to avoid ambiguity
+// Enhanced version with better error handling
 bool WriteHIDOutputReport(int length) {
     if (!DeviceHandle) return false;
-    
+
     // Increase buffer size to HIDREPORTNUM (65 bytes)
     unsigned char OutputReport[HIDREPORTNUM] = { 0 };
     OutputReport[0] = 0; // Report ID
-    
+
     // Make sure we don't overflow the buffer
-    std::memcpy(&OutputReport[1], TxData, std::min(static_cast<size_t>(TxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
-    
-    int res = hid_write(DeviceHandle, OutputReport, length);
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    if (res < 0) {
-        printf("Write failed with error: %d\n", res);
-        return false;
+    std::memcpy(&OutputReport[1], TxData, std::min(static_cast<size_t>(TxNum),
+        static_cast<size_t>(HIDREPORTNUM - 1)));
+
+    // Try multiple times in case of transient errors
+    int max_retries = 3;
+    int res = -1;
+
+    for (int retry = 0; retry < max_retries; retry++) {
+        res = hid_write(DeviceHandle, OutputReport, length);
+
+        if (res >= 0) {
+            // Success
+            break;
+        }
+
+        printf("Write failed (attempt %d/%d) with error: %d - %ls\n",
+            retry + 1, max_retries, res, hid_error(DeviceHandle));
+
+        if (retry < max_retries - 1) {
+            // Wait before retry
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
-    return true;
+
+    // Add a small delay after sending to allow device to process
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+
+    return (res >= 0);
 }
 
-// Add this function to use the timeout feature of hidapi with proper buffer handling
+// Enhanced version with better buffer management
 bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
+    if (!DeviceHandle) return false;
+
     // Increase buffer size to HIDREPORTNUM (65 bytes)
     unsigned char InputReport[HIDREPORTNUM] = { 0 };
-    
-    // Use hid_read_timeout instead of hid_read to avoid indefinite blocking
-    int res = hid_read_timeout(DeviceHandle, InputReport, length, timeout_ms);
-    if (res > 0) {
-        // Make sure we don't overflow the buffer
-        std::memcpy(RxData, &InputReport[1], std::min(static_cast<size_t>(RxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
-        return true;
+
+    // Start timing
+    auto start_time = std::chrono::steady_clock::now();
+    int total_time_ms = 0;
+    int result = 0;
+
+    // Loop with short timeouts to be more responsive
+    while (total_time_ms < timeout_ms) {
+        // Use shorter incremental timeouts for more responsive behavior
+        int this_timeout = std::min(50, timeout_ms - total_time_ms);
+
+        result = hid_read_timeout(DeviceHandle, InputReport, length, this_timeout);
+
+        if (result > 0) {
+            // Success - copy data with bounds checking
+            std::memcpy(RxData, &InputReport[1], std::min(static_cast<size_t>(RxNum),
+                static_cast<size_t>(HIDREPORTNUM - 1)));
+            return true;
+        }
+        else if (result < 0) {
+            // Error occurred
+            printf("HID read error: %ls\n", hid_error(DeviceHandle));
+            return false;
+        }
+
+        // Update elapsed time
+        auto now = std::chrono::steady_clock::now();
+        total_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - start_time).count());
     }
+
+    // Timeout occurred
     return false;
 }
 

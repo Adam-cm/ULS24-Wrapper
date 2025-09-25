@@ -39,6 +39,8 @@ public:
     int LoadTrimFile();
     void ResetTrim();
     void ReadTrimData(); // From flash
+    // Add to the public section of the CInterfaceObject class
+    bool ResetUSBEndpoints();
 
     // Add this to the public section of the CInterfaceObject class
     void CaptureEvenRows(uint8_t chan);
