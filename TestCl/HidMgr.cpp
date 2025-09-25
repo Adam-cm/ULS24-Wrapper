@@ -1,3 +1,5 @@
+// Copyright 2023, All rights reserved
+
 #include <hidapi/hidapi.h>
 #include <cstdio>
 #include <cstring>
@@ -20,25 +22,45 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/hidraw.h>
+#else
+#include <windows.h>
 #endif
 
 #include "HidMgr.h"
 
+// Global variables
 bool g_DeviceDetected = false;
 int Continue_Flag = 0;
 bool ee_continue = false;
-int chan_num = 0;
+int chan_num = 1;  // Default to channel 1
 
-// Global device handle (already declared in header)
-// hid_device* DeviceHandle = nullptr;
-// Just keep the definition:
 hid_device* DeviceHandle = nullptr;
 
-// Buffers for communication (1st byte is report ID, usually 0)
-uint8_t RxData[RxNum];
-uint8_t TxData[TxNum];
+// Communication buffers
+uint8_t RxData[RxNum] = { 0 };
+uint8_t TxData[TxNum] = { 0 };
 
-// Just implement the methods directly:
+// Windows-specific globals
+#ifdef _WIN32
+HANDLE ReadHandle = INVALID_HANDLE_VALUE;
+HANDLE hEventObject = NULL;
+DWORD NumberOfBytesRead = 0;
+OVERLAPPED HIDOverlapped = { 0 };
+unsigned char InputReport[HIDREPORTNUM] = { 0 };
+struct {
+    ULONG InputReportByteLength;
+} Capabilities = { 0 };
+bool MyDeviceDetected = false;
+#else
+// Non-Windows placeholders
+typedef int DWORD;
+#define WAIT_OBJECT_0 0
+#define WAIT_TIMEOUT 258
+unsigned char InputReport[HIDREPORTNUM] = { 0 };
+bool MyDeviceDetected = false;
+#endif
+
+// CircularBuffer implementation
 bool CircularBuffer::push(std::vector<uint8_t>&& report) {
     size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
     if (next_head == tail) {
@@ -66,13 +88,14 @@ size_t CircularBuffer::size() const {
     return (head >= tail) ? (head - tail) : (CIRCULAR_BUFFER_SIZE - tail + head);
 }
 
-// Create the buffer and sync objects
+// Buffer and synchronization objects
 static CircularBuffer hid_report_buffer;
 static std::mutex hid_buffer_mutex;
 static std::condition_variable hid_buffer_cv;
 static std::atomic<bool> hid_read_thread_running{ false };
 static std::thread hid_read_thread;
 
+// Thread function for continuous HID reading
 static void HidReadThreadFunc() {
     // Pre-allocate vector to avoid allocation during read
     std::vector<uint8_t> report(RxNum);
@@ -128,7 +151,7 @@ static void HidReadThreadFunc() {
     }
 }
 
-// When starting the thread
+// Start the read thread
 void StartHidReadThread() {
     if (!hid_read_thread_running) {
         // On Pi, increase the non-blocking poll rate
@@ -155,23 +178,38 @@ size_t GetBufferSize() {
     return hid_report_buffer.size();
 }
 
+// Simple flow check - for monitoring
+int check_data_flow() {
+    static int last_size = 0;
+    int current_size = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(hid_buffer_mutex);
+        current_size = static_cast<int>(hid_report_buffer.size());
+    }
+
+    int delta = current_size - last_size;
+    last_size = current_size;
+
+    return delta;
+}
+
 // Retrieve the next HID report (blocks until available)
 bool GetNextHidReport(std::vector<uint8_t>& report) {
-    std::unique_lock<std::mutex> lock(hid_buffer_mutex); // Use hid_buffer_mutex instead of hid_queue_mutex
+    std::unique_lock<std::mutex> lock(hid_buffer_mutex);
     hid_buffer_cv.wait(lock, [] {
         return !hid_report_buffer.empty() || !hid_read_thread_running;
         });
 
     if (!hid_report_buffer.empty()) {
-        hid_report_buffer.pop(report); // Use circular buffer pop instead of queue operations
+        hid_report_buffer.pop(report);
         return true;
     }
     return false;
 }
 
 // Find and open the HID device
-bool FindTheHID()
-{
+bool FindTheHID() {
     if (hid_init() != 0) {
         std::printf("hidapi init failed\n");
         return false;
@@ -220,35 +258,38 @@ bool FindTheHID()
 
         // Start the read thread
         StartHidReadThread();
+        g_DeviceDetected = true;
         return true;
     }
     else {
         std::printf("Device not found.\n");
+        g_DeviceDetected = false;
         return false;
     }
 }
 
 // Close the HID device and stop thread
-void CloseHandles()
-{
+void CloseHandles() {
     StopHidReadThread();
     if (DeviceHandle) {
         hid_close(DeviceHandle);
         DeviceHandle = nullptr;
     }
     hid_exit();
+    g_DeviceDetected = false;
 }
 
-// Write HID output report
-bool WriteHIDOutputReport(int length)
-{
+// Write HID output report - single implementation to avoid ambiguity
+bool WriteHIDOutputReport(int length) {
+    if (!DeviceHandle) return false;
+
     unsigned char OutputReport[HIDREPORTNUM] = { 0 };
     OutputReport[0] = 0; // Report ID
     std::memcpy(&OutputReport[1], TxData, TxNum);
     int res = hid_write(DeviceHandle, OutputReport, length);
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (res < 0) {
-        // std::printf("Write failed: %ls\n", hid_error(DeviceHandle));
+        printf("Write failed with error: %d\n", res);
         return false;
     }
     return true;
@@ -304,35 +345,8 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
     return false;
 }
 
-// Add these at the top for Windows-specific components
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-// Define Windows structures and variables for cross-platform code
-#ifdef _WIN32
-HANDLE ReadHandle = INVALID_HANDLE_VALUE;
-HANDLE hEventObject = NULL;
-DWORD NumberOfBytesRead = 0;
-OVERLAPPED HIDOverlapped = { 0 };
-unsigned char InputReport[HIDREPORTNUM] = { 0 };
-struct {
-    ULONG InputReportByteLength;
-    // Add any other needed fields
-} Capabilities = { 0 };
-bool MyDeviceDetected = false;
-#else
-// Non-Windows placeholders
-typedef int DWORD;
-#define WAIT_OBJECT_0 0
-#define WAIT_TIMEOUT 258
-unsigned char InputReport[HIDREPORTNUM] = { 0 };
-bool MyDeviceDetected = false;
-#endif
-
-// Replace the current ReadHIDInputReport with this platform-specific implementation
-void ReadHIDInputReport()
-{
+// Cross-platform read implementation
+void ReadHIDInputReport() {
 #ifdef _WIN32
     // Windows implementation
     DWORD Result;
@@ -452,11 +466,5 @@ void ReadHIDInputReport()
         g_DeviceDetected = false;
         MyDeviceDetected = false;
     }
-    else {
-        // No data available (timeout)
-    }
 #endif
 }
-
-// C-style wrappers for compatibility
-void WriteHIDOutputReport(void) { WriteHIDOutputReport(HIDREPORTNUM); }

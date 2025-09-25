@@ -1,4 +1,4 @@
-// Copyright 2014-2017, Anitoa Systems, LLC
+// Copyright 2014-2023, Anitoa Systems, LLC
 // All rights reserved
 
 #include "InterfaceObj.h"
@@ -11,22 +11,21 @@
 
 namespace fs = std::filesystem;
 
+// External variables
 extern uint8_t TxData[TxNum];
 extern uint8_t RxData[RxNum];
-
 extern bool g_DeviceDetected;
 extern bool MyDeviceDetected; // redundant, maybe keep only one?
+extern int Continue_Flag;
+extern bool ee_continue;
+extern int chan_num;
 
+// Global state variables
 int gain_mode = 0;
 float int_time = 1;
 int frame_size = 0;
 
-extern int Continue_Flag;
-extern bool ee_continue;
-
-// Add this line near the other extern declarations at the top of the file
-extern int chan_num;  // The current channel number being processed
-
+// Global interface object instance
 CInterfaceObject theInterfaceObject;
 
 CInterfaceObject::CInterfaceObject()
@@ -41,42 +40,19 @@ std::string CInterfaceObject::GetChipName()
 
 void CInterfaceObject::ResetTrim()
 {
-    SelSensor(1);
-    SetRampgen((uint8_t)m_TrimReader.Node[0].rampgen);
-    SetRangeTrim(0x0f);
-    SetV20(m_TrimReader.Node[0].auto_v20[1]);
-    SetV15(m_TrimReader.Node[0].auto_v15);
-    SetGainMode(1);
-    SetTXbin(0x8);
-    SetIntTime(1);
+    // Configure all 4 sensors with their proper settings
+    for (int i = 1; i <= 4; i++) {
+        SelSensor(i);
+        SetRampgen((uint8_t)m_TrimReader.Node[i - 1].rampgen);
+        SetRangeTrim(0x0f);
+        SetV20(m_TrimReader.Node[i - 1].auto_v20[1]);
+        SetV15(m_TrimReader.Node[i - 1].auto_v15);
+        SetGainMode(1);
+        SetTXbin(0x8);
+        SetIntTime(1);
+    }
 
-    SelSensor(2);
-    SetRampgen((uint8_t)m_TrimReader.Node[1].rampgen);
-    SetRangeTrim(0x0f);
-    SetV20(m_TrimReader.Node[1].auto_v20[1]);
-    SetV15(m_TrimReader.Node[1].auto_v15);
-    SetGainMode(1);
-    SetTXbin(0x8);
-    SetIntTime(1);
-
-    SelSensor(3);
-    SetRampgen((uint8_t)m_TrimReader.Node[2].rampgen);
-    SetRangeTrim(0x0f);
-    SetV20(m_TrimReader.Node[2].auto_v20[1]);
-    SetV15(m_TrimReader.Node[2].auto_v15);
-    SetGainMode(1);
-    SetTXbin(0x8);
-    SetIntTime(1);
-
-    SelSensor(4);
-    SetRampgen((uint8_t)m_TrimReader.Node[3].rampgen);
-    SetRangeTrim(0x0f);
-    SetV20(m_TrimReader.Node[3].auto_v20[1]);
-    SetV15(m_TrimReader.Node[3].auto_v15);
-    SetGainMode(1);
-    SetTXbin(0x8);
-    SetIntTime(1);
-
+    // Flash all LEDs briefly then turn off
     SetLEDConfig(true, true, true, true, true);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     SetLEDConfig(true, false, false, false, false);
@@ -106,10 +82,12 @@ void CInterfaceObject::SetGainMode(int gain)
     ReadHIDInputReport();
 
     gain_mode = gain;
+
+    // Adjust V20 based on gain mode
     if (!gain)
-        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[1]);
+        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[1]);  // Low gain
     else
-        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[0]);
+        SetV20(m_TrimReader.Node[cur_chan - 1].auto_v20[0]);  // High gain
 }
 
 void CInterfaceObject::SetRangeTrim(uint8_t range)
@@ -169,7 +147,7 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting enhanced Windows-compatible capture for channel %d\n", chan);
+    printf("Starting Windows-compatible capture for channel %d\n", chan);
 
     // Initialize for proper row tracking without interpolation
     bool rows_received[12] = { false };
@@ -189,34 +167,30 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     // Make sure chan_num is set correctly before sending the command
     chan_num = chan;
 
-    // This is EXACTLY how the Windows version works - Issue capture command
-    printf("Sending standard Windows capture command\n");
+    // Issue capture command
+    printf("Sending capture command\n");
     m_TrimReader.Capture12(chan);
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
 
-    // Windows sets this flag to true and waits for it to become false
+    // Set continue flag for capture loop
     Continue_Flag = true;
 
-    // Main capture loop - loop until Continue_Flag becomes false
-    // This is exactly how the Windows version works
+    // Main capture loop
     printf("Reading rows in Windows-compatible mode...\n");
 
-    // Safety limit to prevent infinite loops
-    const int MAX_READS = 100;
+    const int MAX_READS = 100;  // Safety limit to prevent infinite loops
     int reads = 0;
 
     while (Continue_Flag && reads < MAX_READS) {
         ReadHIDInputReport();
 
-        // Check if we got valid data - debug the packet structure
+        // Check if we got valid data
         uint8_t cmd_type = RxData[2];  // Command type from device
         uint8_t row_type = RxData[4];  // Row type from device
         uint8_t row = RxData[5];       // Row number
 
-        printf("Packet %d: cmd=0x%02x type=0x%02x row=0x%02x\n", reads, cmd_type, row_type, row);
-
-        // Windows code checks for specific end patterns
+        // Check for end signal
         if ((row == 0x0b) || (row == 0xf1)) {
             printf("Received end signal (0x%02x)\n", row);
             Continue_Flag = false;
@@ -226,31 +200,34 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             break;
         }
 
-        // Process the data exactly as Windows does if this is a valid row
-        if (row < 12) {
-            ProcessRowData();
-
-            // Track the rows we've received
-            if (!rows_received[row]) {
-                rows_received[row] = true;
-                total_rows++;
-                printf("Got row %d (%d/12 total)\n", row, total_rows);
-            }
+        // Update channel number from response if needed
+        if ((row_type & 0xF0) > 0) {
+            chan_num = ((row_type & 0xF0) >> 4) + 1;
         }
 
-        // Clear RxData as Windows does
+        // Process the data
+        ProcessRowData();
+
+        // Track the rows we've received
+        if (row < 12 && !rows_received[row]) {
+            rows_received[row] = true;
+            total_rows++;
+            printf("Got row %d (%d/12 total)\n", row, total_rows);
+        }
+
+        // Clear RxData for next read
         std::memset(RxData, 0, sizeof(RxData));
         reads++;
     }
 
-    // If we didn't get a proper end signal, force end of capture
+    // Handle timeout case
     if (reads >= MAX_READS) {
         printf("WARNING: Maximum read attempts reached, forcing capture to end\n");
         Continue_Flag = false;
     }
 
 #ifdef __linux__
-    // Restore thread-based reader
+    // Restore thread-based reader on Linux
     if (DeviceHandle) {
         printf("Restoring standard USB access mode\n");
         hid_set_nonblocking(DeviceHandle, 1);
@@ -258,17 +235,16 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Final report
+    // Report capture results
     printf("\nCapture complete - received %d/12 rows\n", total_rows);
+
     if (total_rows < 12) {
         printf("Missing rows:");
         for (int i = 0; i < 12; i++) {
             if (!rows_received[i]) printf(" %d", i);
         }
         printf("\n");
-
-        // For research, don't do interpolation but report the issue
-        printf("WARNING: Incomplete data captured. For research purposes, no interpolation performed.\n");
+        printf("WARNING: Incomplete data captured. No interpolation performed.\n");
     }
     else {
         printf("SUCCESS! All 12 rows received directly from device.\n");
@@ -282,12 +258,14 @@ int CInterfaceObject::CaptureFrame24()
     m_TrimReader.Capture24();
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
+
     Continue_Flag = true;
     while (Continue_Flag) {
         ReadHIDInputReport();
         ProcessRowData();
         std::memset(RxData, 0, sizeof(RxData));
     }
+
     return 0;
 }
 
@@ -296,10 +274,12 @@ int CInterfaceObject::LoadTrimFile()
     // Use C++17 filesystem for cross-platform current directory
     std::string path = fs::current_path().string();
     path += "/Trim/trim.dat";
+
     int e = m_TrimReader.Load(path);
     if (e == 0) {
         m_TrimReader.Parse();
     }
+
     return e;
 }
 
@@ -308,11 +288,13 @@ void CInterfaceObject::ReadTrimData()
     m_TrimReader.EEPROMRead();
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
+
     while (ee_continue) {
         ReadHIDInputReport();
         m_TrimReader.OnEEPROMRead();
         std::memset(RxData, 0, sizeof(RxData));
     }
+
     m_TrimReader.ReadTrimData();
     ResetTrim();
 }
