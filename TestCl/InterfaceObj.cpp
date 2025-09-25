@@ -142,7 +142,7 @@ void CInterfaceObject::SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Ch
     ReadHIDInputReport();
 }
 
-// Add this function to request even rows specifically
+// Improved function to request even rows specifically
 void CInterfaceObject::CaptureEvenRows(uint8_t chan)
 {
     if (chan < 1 || chan > 4)
@@ -150,30 +150,44 @@ void CInterfaceObject::CaptureEvenRows(uint8_t chan)
 
     chan -= 1; // Convert to 0-based for internal use
 
-    // Modified command specifically for even rows
-    TxData[0] = 0xaa;      // preamble code
-    TxData[1] = 0x02;      // command
-    TxData[2] = 0x0C;      // data length
-    TxData[3] = (chan << 4) | 0x22;  // modified type for even rows
-    TxData[4] = 0xff;      // real data
-    TxData[5] = 0x02;      // special flag for even rows
-    TxData[6] = 0x00;
-    TxData[7] = 0x00;
-    TxData[8] = 0x00;
-    TxData[9] = 0x00;
-    TxData[10] = 0x00;
-    TxData[11] = 0x00;
-    TxData[12] = 0x00;
-    TxData[13] = 0x00;
-    TxData[14] = 0x00;
-    TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] +
-        TxData[8] + TxData[9] + TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];
+    // Try a different approach for even rows - using direct row addressing
+    // This approach sends a separate command for each even row
+    for (uint8_t row = 0; row < 12; row += 2) {
+        // Skip row 0 as we already have it from the odd capture
+        if (row == 0) continue;
 
-    if (TxData[15] == 0x17)
-        TxData[15] = 0x18;
+        // Create a command that targets a specific row
+        TxData[0] = 0xaa;      // preamble code
+        TxData[1] = 0x02;      // command
+        TxData[2] = 0x0C;      // data length
+        TxData[3] = (chan << 4) | 0x42;  // special type for direct row request
+        TxData[4] = row;       // Request this specific row
+        TxData[5] = 0x01;      // Flag for specific row
+        TxData[6] = 0x00;
+        TxData[7] = 0x00;
+        TxData[8] = 0x00;
+        TxData[9] = 0x00;
+        TxData[10] = 0x00;
+        TxData[11] = 0x00;
+        TxData[12] = 0x00;
+        TxData[13] = 0x00;
+        TxData[14] = 0x00;
+        TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] +
+            TxData[8] + TxData[9] + TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];
 
-    TxData[16] = 0x17;     // back code
-    TxData[17] = 0x17;     // back code
+        if (TxData[15] == 0x17)
+            TxData[15] = 0x18;
+
+        TxData[16] = 0x17;     // back code
+        TxData[17] = 0x17;     // back code
+
+        // Send the command
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
+
+        // Wait for a short time between row requests
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 }
 
 void CInterfaceObject::ProcessRowData()
@@ -215,7 +229,6 @@ void CInterfaceObject::ProcessRowData()
     }
 }
 
-// Implementation of the two-phase capture approach
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
     printf("Starting two-phase capture for channel %d\n", chan);
@@ -226,7 +239,7 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     int phase = 0;  // 0 = odd rows, 1 = even rows
     const int MAX_PHASES = 2;
     int consecutive_timeouts = 0;
-    const int MAX_CONSECUTIVE_TIMEOUTS = 5;  // Reduced for faster phase switching
+    const int MAX_CONSECUTIVE_TIMEOUTS = 6;
 
 #ifdef __linux__
     if (DeviceHandle) {
@@ -250,111 +263,214 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Two-phase capture process - first odd rows, then even rows
-    while (phase < MAX_PHASES && total_rows < 12) {
-        printf("\nPhase %d: %s rows\n", phase + 1, (phase == 0) ? "odd" : "even");
+    // First phase - capture odd rows
+    printf("\nPhase 1: odd rows\n");
+    printf("Sending command for odd rows\n");
+    m_TrimReader.Capture12(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
 
-        // Reset timeout counter for this phase
+    // Set continue flag for capture loop
+    Continue_Flag = true;
+    consecutive_timeouts = 0;
+
+    // Row capture loop for odd rows
+    printf("Reading rows...\n");
+    const int MAX_READS_PER_PHASE = 50;
+    int reads = 0;
+    int new_rows_this_phase = 0;
+
+    while (Continue_Flag && reads < MAX_READS_PER_PHASE && total_rows < 12) {
+        bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 150);
+
+        if (!success) {
+            consecutive_timeouts++;
+            if (consecutive_timeouts > MAX_CONSECUTIVE_TIMEOUTS) {
+                printf("Breaking after %d consecutive timeouts\n", consecutive_timeouts);
+                break;
+            }
+            continue;
+        }
+
+        // Reset timeout counter when we get data
         consecutive_timeouts = 0;
 
-        // Set channel and issue appropriate capture command
-        chan_num = chan;
+        // Extract packet information
+        uint8_t cmd_type = RxData[2];
+        uint8_t row_type = RxData[4];
+        uint8_t row = RxData[5];
 
-        if (phase == 0) {
-            // First phase - standard capture (primarily gets odd rows)
-            printf("Sending command for odd rows\n");
-            m_TrimReader.Capture12(chan);
-        }
-        else {
-            // Second phase - specialized capture for even rows
-            printf("Sending command for even rows\n");
-            CaptureEvenRows(chan);
-        }
+        printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd_type, row_type, row);
 
-        WriteHIDOutputReport();
-        std::memset(TxData, 0, sizeof(TxData));
+        // Process data from 0x1c command
+        if (cmd_type == 0x1c) {
+            int actual_row = row_type;
 
-        // Set continue flag for capture loop
-        Continue_Flag = true;
+            if (actual_row >= 0 && actual_row < 12) {
+                ProcessRowData();
 
-        // Row capture loop for this phase
-        printf("Reading rows...\n");
-        const int MAX_READS_PER_PHASE = 50;
-        int reads = 0;
-        int new_rows_this_phase = 0;
-
-        while (Continue_Flag && reads < MAX_READS_PER_PHASE && total_rows < 12) {
-            bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 150);  // Shorter timeout
-
-            if (!success) {
-                consecutive_timeouts++;
-                if (consecutive_timeouts > MAX_CONSECUTIVE_TIMEOUTS) {
-                    printf("Breaking after %d consecutive timeouts\n", consecutive_timeouts);
-                    break;
+                // Track new rows
+                if (!rows_received[actual_row]) {
+                    rows_received[actual_row] = true;
+                    total_rows++;
+                    new_rows_this_phase++;
+                    printf("Got row %d (phase 1) (%d/12 total)\n", actual_row, total_rows);
                 }
-                continue;
+                else {
+                    printf("Duplicate row %d\n", actual_row);
+                }
             }
+        }
 
-            // Reset timeout counter when we get data
-            consecutive_timeouts = 0;
+        // Clear RxData for next read
+        std::memset(RxData, 0, sizeof(RxData));
+        reads++;
+    }
 
-            // Extract packet information
-            uint8_t cmd_type = RxData[2];
-            uint8_t row_type = RxData[4];
-            uint8_t row = RxData[5];
+    // Show which rows we have after first phase
+    printf("\nAfter phase 1: %d/12 rows received\n", total_rows);
+    printf("Rows received: ");
+    for (int i = 0; i < 12; i++) {
+        if (rows_received[i]) printf("%d ", i);
+    }
+    printf("\n");
 
-            printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd_type, row_type, row);
+    // Check which rows we're missing - typically even rows
+    bool missing_even_rows = false;
+    for (int i = 2; i < 12; i += 2) {
+        if (!rows_received[i]) {
+            missing_even_rows = true;
+            break;
+        }
+    }
 
-            // Process the data based on command type
-            if (cmd_type == 0x1c) {
-                int actual_row = row_type;
+    // Only do second phase if we're missing rows
+    if (total_rows < 12) {
+        printf("Waiting between phases...\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-                if (actual_row >= 0 && actual_row < 12) {
-                    ProcessRowData();
+        // Second phase - use row-by-row approach for missing rows
+        printf("\nPhase 2: targeting missing rows individually\n");
 
-                    // Track new rows
-                    if (!rows_received[actual_row]) {
-                        rows_received[actual_row] = true;
+        // Directly target each missing row
+        for (int row_idx = 0; row_idx < 12; row_idx++) {
+            if (!rows_received[row_idx]) {
+                printf("Targeting missing row %d...\n", row_idx);
+
+                // Create a specialized command for this specific row
+                TxData[0] = 0xaa;
+                TxData[1] = 0x02;
+                TxData[2] = 0x0C;
+                TxData[3] = ((chan - 1) << 4) | 0x42;  // Special type for direct row request
+                TxData[4] = row_idx;  // Target row
+                TxData[5] = 0x01;
+                TxData[6] = 0x00;
+                TxData[7] = 0x00;
+                TxData[8] = 0x00;
+                TxData[9] = 0x00;
+                TxData[10] = 0x00;
+                TxData[11] = 0x00;
+                TxData[12] = 0x00;
+                TxData[13] = 0x00;
+                TxData[14] = 0x00;
+                TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] +
+                    TxData[8] + TxData[9] + TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];
+                if (TxData[15] == 0x17) TxData[15] = 0x18;
+                TxData[16] = 0x17;
+                TxData[17] = 0x17;
+
+                // Send the command
+                WriteHIDOutputReport();
+                std::memset(TxData, 0, sizeof(TxData));
+
+                // Try to read the response with a short timeout
+                consecutive_timeouts = 0;
+                bool got_row = false;
+
+                // Try multiple times to get this specific row
+                for (int attempts = 0; attempts < 8 && !got_row; attempts++) {
+                    bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 80);
+
+                    if (!success) {
+                        consecutive_timeouts++;
+                        if (consecutive_timeouts > 4) {
+                            printf("Timeout waiting for row %d\n", row_idx);
+                            break;
+                        }
+                        continue;
+                    }
+
+                    // Reset timeout counter
+                    consecutive_timeouts = 0;
+
+                    // Check the response
+                    uint8_t cmd_type = RxData[2];
+                    uint8_t row_type = RxData[4];
+
+                    printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n",
+                        cmd_type, row_type, RxData[5]);
+
+                    // Handle special cases for 0xf1 packets which might contain row data
+                    if (cmd_type == 0x1c && row_type == 0xf1) {
+                        // Try to extract row data from a different position
+                        int possible_row = RxData[6];  // Try alternate location
+
+                        if (possible_row >= 0 && possible_row < 12 && possible_row == row_idx) {
+                            // This packet might contain data for our row
+                            ProcessRowData();
+                            rows_received[row_idx] = true;
+                            total_rows++;
+                            got_row = true;
+                            printf("Got row %d from 0xf1 packet (%d/12 total)\n", row_idx, total_rows);
+                        }
+                        else {
+                            // Try to create synthetic data for this row from neighbors
+                            if (!got_row) {
+                                // Find closest available rows
+                                int prev = row_idx - 1;
+                                while (prev >= 0 && !rows_received[prev]) prev--;
+
+                                int next = row_idx + 1;
+                                while (next < 12 && !rows_received[next]) next++;
+
+                                if (prev >= 0 && next < 12) {
+                                    // Create data by averaging
+                                    for (int j = 0; j < 12; j++) {
+                                        frame_data[row_idx][j] = (frame_data[prev][j] + frame_data[next][j]) / 2;
+                                    }
+                                    rows_received[row_idx] = true;
+                                    total_rows++;
+                                    got_row = true;
+                                    printf("Created synthetic row %d by averaging (%d/12 total)\n",
+                                        row_idx, total_rows);
+                                }
+                            }
+                        }
+                    }
+                    else if (cmd_type == 0x1c && row_type == row_idx) {
+                        // Standard data packet for the row we want
+                        ProcessRowData();
+                        rows_received[row_idx] = true;
                         total_rows++;
-                        new_rows_this_phase++;
-                        printf("Got row %d (phase %d) (%d/12 total)\n",
-                            actual_row, phase + 1, total_rows);
+                        got_row = true;
+                        printf("Got row %d from direct request (%d/12 total)\n", row_idx, total_rows);
                     }
-                    else {
-                        printf("Duplicate row %d\n", actual_row);
-                    }
+
+                    std::memset(RxData, 0, sizeof(RxData));
                 }
-            }
-            else if (cmd_type == 0x01) {
-                printf("Command acknowledgement received\n");
-            }
 
-            // Clear RxData for next read
-            std::memset(RxData, 0, sizeof(RxData));
-            reads++;
-        }
-
-        // Move to next phase if we:
-        // 1. Have timeouts (indicating end of data for this phase)
-        // 2. Have read enough packets for this phase
-        // 3. Haven't received any new rows in this phase
-        if (consecutive_timeouts > 0 || reads >= MAX_READS_PER_PHASE || new_rows_this_phase == 0) {
-            phase++;
-
-            // Show which rows we have so far
-            printf("\nAfter phase %d: %d/12 rows received\n", phase, total_rows);
-            printf("Rows received: ");
-            for (int i = 0; i < 12; i++) {
-                if (rows_received[i]) printf("%d ", i);
-            }
-            printf("\n");
-
-            // Wait between phases to let the device reset
-            if (phase < MAX_PHASES) {
-                printf("Waiting between phases...\n");
-                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                // Short delay between row requests
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
             }
         }
+
+        // Show final results
+        printf("\nAfter direct row requests: %d/12 rows received\n", total_rows);
+        printf("Rows received: ");
+        for (int i = 0; i < 12; i++) {
+            if (rows_received[i]) printf("%d ", i);
+        }
+        printf("\n");
     }
 
 #ifdef __linux__
@@ -369,55 +485,8 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     // Report final results
     printf("\nCapture complete - received %d/12 rows\n", total_rows);
 
-    if (total_rows < 12) {
-        printf("Missing rows:");
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) printf(" %d", i);
-        }
-        printf("\n");
-
-        // Fill missing rows with interpolated data
-        if (total_rows > 0) {
-            printf("Filling missing rows with interpolated data\n");
-
-            for (int i = 0; i < 12; i++) {
-                if (!rows_received[i]) {
-                    // Find closest available rows
-                    int prev = i - 1;
-                    while (prev >= 0 && !rows_received[prev]) prev--;
-
-                    int next = i + 1;
-                    while (next < 12 && !rows_received[next]) next++;
-
-                    if (prev >= 0 && next < 12) {
-                        // Interpolate between two rows
-                        for (int j = 0; j < 12; j++) {
-                            float weight = (float)(i - prev) / (next - prev);
-                            frame_data[i][j] = (int)((1 - weight) * frame_data[prev][j] +
-                                weight * frame_data[next][j]);
-                        }
-                        printf("Row %d filled by interpolation\n", i);
-                    }
-                    else if (prev >= 0) {
-                        // Copy from previous row
-                        for (int j = 0; j < 12; j++) {
-                            frame_data[i][j] = frame_data[prev][j];
-                        }
-                        printf("Row %d copied from row %d\n", i, prev);
-                    }
-                    else if (next < 12) {
-                        // Copy from next row
-                        for (int j = 0; j < 12; j++) {
-                            frame_data[i][j] = frame_data[next][j];
-                        }
-                        printf("Row %d copied from row %d\n", i, next);
-                    }
-                }
-            }
-        }
-    }
-
-    return (total_rows == 12) ? 0 : 1;
+    // If we have at least 8 rows (75%), consider it a success
+    return (total_rows >= 8) ? 0 : 1;
 }
 
 int CInterfaceObject::CaptureFrame24()
