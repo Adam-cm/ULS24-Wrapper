@@ -478,7 +478,7 @@ int CInterfaceObject::IsDeviceDetected()
     return g_DeviceDetected;
 }
 
-// Add this function to request both odd and even rows in a two-phase capture
+// Add this function to CInterfaceObject class
 void CInterfaceObject::CaptureEvenRows(uint8_t chan)
 {
     if (chan < 1 || chan > 4)
@@ -510,12 +510,9 @@ void CInterfaceObject::CaptureEvenRows(uint8_t chan)
 
     TxData[16] = 0x17;     // back code
     TxData[17] = 0x17;     // back code
-
-    WriteHIDOutputReport();
-    std::memset(TxData, 0, sizeof(TxData));
 }
 
-// Implement a two-phase capture process that gets both odd and even rows
+// This should replace the existing CaptureFrame12 function
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
     printf("Starting two-phase capture for channel %d\n", chan);
@@ -653,75 +650,6 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             if (phase < MAX_PHASES) {
                 printf("Waiting between phases...\n");
                 std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            }
-        }
-    }
-
-    // Try direct row-by-row capture for any missing rows
-    if (total_rows < 12) {
-        printf("\nTrying direct capture for missing rows...\n");
-
-        // One more attempt for each missing row
-        for (int row_idx = 0; row_idx < 12; row_idx++) {
-            if (!rows_received[row_idx]) {
-                printf("Attempting to directly capture row %d...\n", row_idx);
-
-                // Create a specialized command for this specific row
-                TxData[0] = 0xaa;
-                TxData[1] = 0x02;
-                TxData[2] = 0x0C;
-                TxData[3] = ((chan - 1) << 4) | 0x32;  // Special type for direct row request
-                TxData[4] = row_idx;  // Target row
-                TxData[5] = 0x01;
-                TxData[6] = 0x00;
-                TxData[7] = 0x00;
-                TxData[8] = 0x00;
-                TxData[9] = 0x00;
-                TxData[10] = 0x00;
-                TxData[11] = 0x00;
-                TxData[12] = 0x00;
-                TxData[13] = 0x00;
-                TxData[14] = 0x00;
-                TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] +
-                    TxData[8] + TxData[9] + TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];
-                if (TxData[15] == 0x17) TxData[15] = 0x18;
-                TxData[16] = 0x17;
-                TxData[17] = 0x17;
-
-                // Send the command
-                WriteHIDOutputReport();
-                std::memset(TxData, 0, sizeof(TxData));
-
-                // Try to read the row with a timeout
-                consecutive_timeouts = 0;
-                bool row_received = false;
-
-                for (int direct_try = 0; direct_try < 10 && !row_received; direct_try++) {
-                    bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 100);
-
-                    if (!success) {
-                        consecutive_timeouts++;
-                        if (consecutive_timeouts > 3) break;
-                        continue;
-                    }
-
-                    // Check if we got the row we wanted
-                    uint8_t cmd_type = RxData[2];
-                    uint8_t got_row = RxData[4];
-
-                    if (cmd_type == 0x1c && got_row == row_idx) {
-                        ProcessRowData();
-                        rows_received[row_idx] = true;
-                        total_rows++;
-                        row_received = true;
-                        printf("Successfully directly captured row %d (%d/12 total)\n", row_idx, total_rows);
-                    }
-
-                    std::memset(RxData, 0, sizeof(RxData));
-                }
-
-                // Short delay between row requests
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
         }
     }
