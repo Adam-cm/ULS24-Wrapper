@@ -159,6 +159,11 @@ void CInterfaceObject::SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Ch
     ReadHIDInputReport();
 }
 
+void CInterfaceObject::ProcessRowData()
+{
+    frame_size = m_TrimReader.ProcessRowData(frame_data, gain_mode);
+}
+
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
     printf("Starting optimized capture for channel %d\n", chan);
