@@ -45,8 +45,8 @@ ULS24.get.argtypes = [ctypes.c_int]
 ULS24.setinttime.argtypes = [ctypes.c_float]
 ULS24.setgain.argtypes = [ctypes.c_int]
 ULS24.get_frame12.argtypes = [ctypes.POINTER(ctypes.c_int)]
-ULS24.check_data_flow.argtypes = []
-ULS24.check_data_flow.restype = ctypes.c_int
+ULS24.check_data_flow_wrapper.argtypes = []
+ULS24.check_data_flow_wrapper.restype = ctypes.c_int
 ULS24.cancel_capture.argtypes = []
 
 # Ensure we always clean up
@@ -84,7 +84,7 @@ try:
     time.sleep(0.1)
     
     # Clear any pending data
-    count = ULS24.check_data_flow()
+    count = count = ULS24.check_data_flow_wrapper()
     if count > 0:
         print(f"Cleared {count} pending reports")
         
