@@ -14,11 +14,14 @@ class CInterfaceObject
 public:
     CInterfaceObject();
     
-    // Add this line to declare the Initialize method
     void Initialize();
     
     // Frame data storage - using uint16_t to match the values we're storing
     uint16_t frame_data[MAX_IMAGE_SIZE][MAX_IMAGE_SIZE];
+
+    // Add missing member variables
+    CTrimReader m_TrimReader;
+    int cur_chan;
 
     // Functions
     std::string GetChipName();

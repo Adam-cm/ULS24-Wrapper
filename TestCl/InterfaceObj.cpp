@@ -10,6 +10,11 @@
 #include <filesystem>
 #include <vector>   // Make sure this is included
 
+// Add this for geteuid() on Linux
+#ifdef __linux__
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
 
 // External variables
