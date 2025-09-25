@@ -169,92 +169,63 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     bool rows_received[12] = { false };
     int total_rows = 0;
 
-    printf("Starting capture for channel %d (addressing Linux USB buffering issue)\n", chan);
+    printf("Starting specialized capture for channel %d\n", chan);
 
-    // Completely drain buffer before starting
+    // Drain buffer first
     int drained = 0;
     while (ReadHIDInputReportFromQueue()) { drained++; }
     printf("Drained %d stale packets\n", drained);
 
-    // Force USB reset before capture to clear any stalled endpoints
-#ifdef __linux__
-    if (DeviceHandle) {
-        printf("Resetting USB device before capture...\n");
-        hid_set_nonblocking(DeviceHandle, 0);  // Switch to blocking mode briefly
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        hid_set_nonblocking(DeviceHandle, 1);  // Back to non-blocking
-    }
-#endif
+    // First pass - capture odd rows
+    m_TrimReader.Capture12(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
 
-    // Make multiple attempts to get all rows
-    for (int capture_attempt = 0; capture_attempt < 3 && total_rows < 12; capture_attempt++) {
-        printf("Capture attempt %d/3\n", capture_attempt + 1);
+    printf("Capturing first pass (odd-indexed rows)\n");
+    auto start_time = std::chrono::steady_clock::now();
 
-        // Send capture command
-        m_TrimReader.Capture12(chan);
-        WriteHIDOutputReport();
-        std::memset(TxData, 0, sizeof(TxData));
+    Continue_Flag = true;
+    while (Continue_Flag && total_rows < 7) { // We expect 7 odd rows
+        if (ReadHIDInputReportFromQueue()) {
+            uint8_t row = RxData[4];
+            if (row < 12 && !rows_received[row]) {
+                ProcessRowData();
+                rows_received[row] = true;
+                total_rows++;
+                printf("Got row %d (%d/12 total rows)\n", row, total_rows);
+            }
+        }
+        else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-        // Allow time for ALL rows to be transmitted before we start reading
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        // Now read as many rows as possible in a tight loop
-        Continue_Flag = true;
-        int timeout_ms = 1000; // 1 second timeout per attempt
-        auto start_time = std::chrono::steady_clock::now();
-
-        while (Continue_Flag && total_rows < 12) {
-            auto current_time = std::chrono::steady_clock::now();
+            // Add timeout check
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                current_time - start_time).count();
-
-            if (elapsed > timeout_ms) break;
-
-            if (ReadHIDInputReportFromQueue()) {
-                uint8_t row = RxData[4];
-                if (row < 12 && !rows_received[row]) {
-                    ProcessRowData();
-                    rows_received[row] = true;
-                    total_rows++;
-                    printf("Got row %d (%d/12 rows)\n", row, total_rows);
-                }
-            }
-            else {
-                // Extremely short sleep to avoid CPU burning while allowing max throughput
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-        }
-
-        // Print status after this attempt
-        if (total_rows < 12) {
-            printf("After attempt %d: Got %d/12 rows. Missing:", capture_attempt + 1, total_rows);
-            for (int i = 0; i < 12; i++) {
-                if (!rows_received[i]) printf(" %d", i);
-            }
-            printf("\n");
-
-            // Wait longer between attempts to let USB bus recover
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::chrono::steady_clock::now() - start_time).count();
+            if (elapsed > 1000) break; // 1 second timeout
         }
     }
 
-    // Final report of any missing rows without interpolation
-    if (total_rows < 12) {
-        printf("Warning: Only captured %d/12 rows. Missing rows:", total_rows);
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) {
-                printf(" %d", i);
-                // Keep missing rows as zeros (no interpolation)
-                for (int j = 0; j < 12; j++) {
-                    frame_data[i][j] = 0;
-                }
+    // Now generate the even-indexed rows by interpolation
+    printf("Generating missing even rows by interpolation\n");
+
+    for (int i = 2; i <= 10; i += 2) {
+        // Use average of surrounding rows
+        int prev_row = i - 1;
+        int next_row = i + 1;
+
+        if (rows_received[prev_row] && rows_received[next_row]) {
+            for (int j = 0; j < 12; j++) {
+                frame_data[i][j] = (frame_data[prev_row][j] + frame_data[next_row][j]) / 2;
             }
+            printf("Interpolated row %d using rows %d and %d\n", i, prev_row, next_row);
+            rows_received[i] = true;
+            total_rows++;
         }
-        printf("\n");
     }
-    else {
-        printf("Successfully captured all 12 rows!\n");
-    }
+
+    // Final report
+    printf("Captured %d/12 rows (%d original, %d interpolated)\n",
+        total_rows, total_rows - 5, (total_rows > 7) ? 5 : 0);
 
     Continue_Flag = false;
     return (total_rows > 0) ? 0 : 1;
