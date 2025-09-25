@@ -580,10 +580,7 @@ int CInterfaceObject::WindowsStyleCapture12(uint8_t chan)
             WriteHIDOutputReport();
             std::memset(TxData, 0, sizeof(TxData));
             
-            // Wait for device to process
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            
-            // Read the response with multiple attempts
+            // Wait for response
             bool got_row = false;
             int attempts = 0;
             const int MAX_ATTEMPTS = 5;
@@ -712,7 +709,9 @@ int CInterfaceObject::WindowsStyleCapture12(uint8_t chan)
 // Add a new capture function using direct USB access
 int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
 {
-    printf("Starting direct USB capture for channel %d\n", chan);
+    printf("\n============================================================\n");
+    printf("Starting DETAILED direct USB capture for channel %d\n", chan);
+    printf("============================================================\n");
     
     // Print capture parameters
     printf("Capture parameters: Channel=%d, Gain=%d, IntTime=%.2f\n", 
@@ -739,109 +738,402 @@ int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
         printf("Direct USB connection established\n");
     }
 
+    // Try different initialization approach
+    printf("\n==== DEVICE INITIALIZATION SEQUENCE ====\n");
+    
+    // Reset sequence - similar to what the Windows driver does
+    uint8_t resetCmd[64] = {0};
+    resetCmd[0] = 0xaa;  // preamble
+    resetCmd[1] = 0x01;  // command type (control command)
+    resetCmd[2] = 0x02;  // data length
+    resetCmd[3] = 0x01;  // reset command
+    resetCmd[4] = 0x00;  // parameter
+    resetCmd[15] = resetCmd[1] + resetCmd[2] + resetCmd[3] + resetCmd[4]; // checksum
+    if (resetCmd[15] == 0x17) resetCmd[15] = 0x18;
+    resetCmd[16] = 0x17;  // back code
+    resetCmd[17] = 0x17;  // back code
+    
+    printf("Sending reset command...\n");
+    g_DirectUSB.SendReport(resetCmd, 64);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    // Flush any responses
+    std::vector<uint8_t> report;
+    while(g_DirectUSB.GetNextReport(report, 50)) {
+        printf("Received reset response: %02X %02X %02X %02X...\n", 
+               report[0], report[1], report[2], report[3]);
+    }
+    
     // Start async read thread
     g_DirectUSB.StartAsyncRead();
 
-    // PASS 1: Get all rows using direct USB
-    printf("\n==== DIRECT USB CAPTURE: REQUESTING ALL ROWS ====\n");
+    // PASS 1: Use Windows-style specific row requests
+    printf("\n==== DIRECT USB CAPTURE: USING WINDOWS PROTOCOL ====\n");
     
-    // Format command for capturing all rows
-    TxData[0] = 0xaa;      // preamble code
-    TxData[1] = 0x02;      // command
-    TxData[2] = 0x0C;      // data length
-    TxData[3] = ((chan-1) << 4) | 0x02;  // Standard capture format
-    TxData[4] = 0xff;      // request all rows
-    TxData[5] = 0x00;
-    
-    // Zero out the rest
-    for (int i = 6; i < 15; i++) TxData[i] = 0x00;
+    // First try getting row 0 specifically
+    printf("\n---- Requesting row 0 specifically ----\n");
+    uint8_t row0Cmd[64] = {0};
+    row0Cmd[0] = 0xaa;      // preamble code
+    row0Cmd[1] = 0x02;      // command
+    row0Cmd[2] = 0x0C;      // data length
+    row0Cmd[3] = ((chan-1) << 4) | 0x42;  // Special type for direct row request
+    row0Cmd[4] = 0;         // Request row 0
+    row0Cmd[5] = 0x01;      // Flag for specific row
     
     // Calculate checksum
-    TxData[15] = 0;
+    row0Cmd[15] = 0;
     for (int i = 1; i <= 14; i++) {
-        TxData[15] += TxData[i];
+        row0Cmd[15] += row0Cmd[i];
     }
-    if (TxData[15] == 0x17) 
-        TxData[15] = 0x18;
+    if (row0Cmd[15] == 0x17) 
+        row0Cmd[15] = 0x18;
     
-    TxData[16] = 0x17;     // back code
-    TxData[17] = 0x17;     // back code
-
-    // Send the command via direct USB
-    printf("Sending capture command via direct USB...\n");
-    g_DirectUSB.SendReport(TxData, 64);
+    row0Cmd[16] = 0x17;     // back code
+    row0Cmd[17] = 0x17;     // back code
     
-    // Clear TxData
-    std::memset(TxData, 0, sizeof(TxData));
+    // Send command and log raw data
+    printf("Sending row 0 request with raw data:\n");
+    for (int i = 0; i < 64; i += 16) {
+        printf("  ");
+        for (int j = 0; j < 16 && i+j < 64; j++) {
+            printf("%02X ", row0Cmd[i+j]);
+        }
+        printf("\n");
+    }
     
-    // Process incoming reports
-    printf("Reading rows via direct USB...\n");
+    g_DirectUSB.SendReport(row0Cmd, 64);
     
-    // Set a timeout for the overall capture
+    // Try to get multiple responses (device might send multiple packets)
+    printf("\nWaiting for responses (10 second timeout)...\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Wait for device to process
+    
     auto start_time = std::chrono::high_resolution_clock::now();
-    const auto timeout_duration = std::chrono::seconds(5); // 5 second timeout
+    int responses = 0;
     
-    int consecutive_timeouts = 0;
-    const int MAX_CONSECUTIVE_TIMEOUTS = 10;
-    
-    while (total_rows < 12) {
-        // Check overall timeout
-        auto current_time = std::chrono::high_resolution_clock::now();
-        auto elapsed = current_time - start_time;
-        if (elapsed > timeout_duration) {
-            printf("Capture timed out after %d seconds\n", 
-                   static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(timeout_duration).count()));
+    while (true) {
+        // Check timeout
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time);
+        if (elapsed.count() >= 10) {
+            printf("10 second timeout reached after %d responses\n", responses);
             break;
         }
         
-        // Get next report
+        // Try to get a response
         std::vector<uint8_t> report;
         if (g_DirectUSB.GetNextReport(report, 500)) {
-            // Reset timeout counter
-            consecutive_timeouts = 0;
+            responses++;
             
-            // Copy to RxData for processing
-            std::memcpy(RxData, report.data(), std::min(report.size(), (size_t)RxNum));
-            
-            // Print first few bytes for debugging
-            printf("Received USB report: %02X %02X %02X %02X %02X %02X...\n",
-                   RxData[0], RxData[1], RxData[2], RxData[3], RxData[4], RxData[5]);
-            
-            // Process data
-            uint8_t cmd_type = RxData[2];
-            uint8_t row_type = RxData[4];
-            uint8_t row_idx = RxData[5];
-            
-            if ((cmd_type == 0x1c || cmd_type == 0x02) && row_idx < 12) {
-                // Process the row data
-                for (int i = 0; i < 12; i++) {
-                    uint8_t high_byte = RxData[6 + i * 2];
-                    uint8_t low_byte = RxData[7 + i * 2];
-                    uint16_t value = (high_byte << 8) | low_byte;
-                    frame_data[row_idx][i] = value;
+            // Log raw data
+            printf("\nResponse %d received with %zu bytes:\n", responses, report.size());
+            for (size_t i = 0; i < report.size(); i += 16) {
+                printf("  ");
+                for (size_t j = 0; j < 16 && i+j < report.size(); j++) {
+                    printf("%02X ", report[i+j]);
                 }
-                
-                // Mark row as received
-                if (!rows_received[row_idx]) {
-                    rows_received[row_idx] = true;
-                    total_rows++;
-                    printf("Got row %d (%d/12 total) - %s row\n", 
-                           row_idx, total_rows,
-                           (row_idx % 2 == 0) ? "EVEN" : "ODD");
+                printf("\n");
+            }
+            
+            // Basic packet analysis
+            if (report.size() > 5) {
+                printf("Analysis: ");
+                if (report[0] == 0xAA) {
+                    printf("Valid preamble, ");
+                    printf("Command=0x%02X, ", report[2]);
+                    if (report[2] == 0x01) {
+                        printf("ACK packet, Response=0x%02X\n", report[5]);
+                    }
+                    else if (report[2] == 0x02) {
+                        printf("Data packet, Row=%d\n", report[5]);
+                        
+                        // Check if this is a row data packet
+                        if (report.size() >= 30 && report[5] < 12) {
+                            // Process the row data
+                            uint8_t row_idx = report[5];
+                            
+                            for (int i = 0; i < 12; i++) {
+                                uint8_t high_byte = report[6 + i * 2];
+                                uint8_t low_byte = report[7 + i * 2];
+                                uint16_t value = (high_byte << 8) | low_byte;
+                                frame_data[row_idx][i] = value;
+                            }
+                            
+                            // Mark row as received
+                            if (!rows_received[row_idx]) {
+                                rows_received[row_idx] = true;
+                                total_rows++;
+                                printf("Successfully processed row %d data (%d/12 total)\n", 
+                                       row_idx, total_rows);
+                            }
+                        }
+                    }
+                    else if (report[2] == 0x1C) {
+                        printf("Extended data packet, Row=%d\n", report[5]);
+                        
+                        // Check if this is a row data packet
+                        if (report.size() >= 30 && report[5] < 12) {
+                            // Process the row data
+                            uint8_t row_idx = report[5];
+                            
+                            for (int i = 0; i < 12; i++) {
+                                uint8_t high_byte = report[6 + i * 2];
+                                uint8_t low_byte = report[7 + i * 2];
+                                uint16_t value = (high_byte << 8) | low_byte;
+                                frame_data[row_idx][i] = value;
+                            }
+                            
+                            // Mark row as received
+                            if (!rows_received[row_idx]) {
+                                rows_received[row_idx] = true;
+                                total_rows++;
+                                printf("Successfully processed row %d data (%d/12 total)\n", 
+                                       row_idx, total_rows);
+                            }
+                        }
+                    }
+                }
+                else {
+                    printf("Invalid preamble (0x%02X)\n", report[0]);
                 }
             }
         }
         else {
-            // Timeout - no data received
-            consecutive_timeouts++;
-            printf("No data received (timeout %d/%d)\n", 
-                   consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS);
-            
-            if (consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
-                printf("Too many consecutive timeouts, stopping capture\n");
-                break;
+            printf("No response within 500ms timeout\n");
+            // Break if we've received responses but nothing new is coming
+            if (responses > 0) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (!g_DirectUSB.GetNextReport(report, 500)) {
+                    printf("No further responses after 1.5 seconds, continuing\n");
+                    break;
+                }
             }
         }
+    }
+    
+    // Now try the Windows-style capture
+    printf("\n---- Trying Windows-style full frame capture ----\n");
+    
+    // Format command for capturing all rows
+    uint8_t frameCmd[64] = {0};
+    frameCmd[0] = 0xaa;      // preamble code
+    frameCmd[1] = 0x02;      // command
+    frameCmd[2] = 0x0C;      // data length
+    frameCmd[3] = ((chan-1) << 4) | 0x02;  // Standard Windows format
+    frameCmd[4] = 0xff;      // request all rows
+    frameCmd[5] = 0x00;
+    
+    // Calculate checksum
+    frameCmd[15] = 0;
+    for (int i = 1; i <= 14; i++) {
+        frameCmd[15] += frameCmd[i];
+    }
+    if (frameCmd[15] == 0x17) 
+        frameCmd[15] = 0x18;
+    
+    frameCmd[16] = 0x17;     // back code
+    frameCmd[17] = 0x17;     // back code
+    
+    // Send command and log raw data
+    printf("Sending Windows-style frame request with raw data:\n");
+    for (int i = 0; i < 64; i += 16) {
+        printf("  ");
+        for (int j = 0; j < 16 && i+j < 64; j++) {
+            printf("%02X ", frameCmd[i+j]);
+        }
+        printf("\n");
+    }
+    
+    g_DirectUSB.SendReport(frameCmd, 64);
+    
+    // Wait for responses
+    printf("\nWaiting for responses (10 second timeout)...\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Wait for device to process
+    
+    start_time = std::chrono::high_resolution_clock::now();
+    responses = 0;
+    
+    while (true) {
+        // Check timeout
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time);
+        if (elapsed.count() >= 10) {
+            printf("10 second timeout reached after %d responses\n", responses);
+            break;
+        }
+        
+        // Try to get a response
+        std::vector<uint8_t> report;
+        if (g_DirectUSB.GetNextReport(report, 500)) {
+            responses++;
+            
+            // Log raw data
+            printf("\nResponse %d received with %zu bytes:\n", responses, report.size());
+            for (size_t i = 0; i < report.size(); i += 16) {
+                printf("  ");
+                for (size_t j = 0; j < 16 && i+j < report.size(); j++) {
+                    printf("%02X ", report[i+j]);
+                }
+                printf("\n");
+            }
+            
+            // Basic packet analysis
+            if (report.size() > 5) {
+                printf("Analysis: ");
+                if (report[0] == 0xAA) {
+                    printf("Valid preamble, ");
+                    printf("Command=0x%02X, ", report[2]);
+                    if (report[2] == 0x01) {
+                        printf("ACK packet, Response=0x%02X\n", report[5]);
+                    }
+                    else if (report[2] == 0x02 || report[2] == 0x1C) {
+                        printf("Data packet, Row=%d\n", report[5]);
+                        
+                        // Check if this is a row data packet
+                        if (report.size() >= 30 && report[5] < 12) {
+                            // Process the row data
+                            uint8_t row_idx = report[5];
+                            
+                            for (int i = 0; i < 12; i++) {
+                                uint8_t high_byte = report[6 + i * 2];
+                                uint8_t low_byte = report[7 + i * 2];
+                                uint16_t value = (high_byte << 8) | low_byte;
+                                frame_data[row_idx][i] = value;
+                            }
+                            
+                            // Mark row as received
+                            if (!rows_received[row_idx]) {
+                                rows_received[row_idx] = true;
+                                total_rows++;
+                                printf("Successfully processed row %d data (%d/12 total)\n", 
+                                       row_idx, total_rows);
+                            }
+                        }
+                    }
+                }
+                else {
+                    printf("Invalid preamble (0x%02X)\n", report[0]);
+                }
+            }
+        }
+        else {
+            printf("No response within 500ms timeout\n");
+            // Break if we've received responses but nothing new is coming
+            if (responses > 0) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (!g_DirectUSB.GetNextReport(report, 500)) {
+                    printf("No further responses after 1.5 seconds, continuing\n");
+                    break;
+                }
+            }
+        }
+    }
+
+    // Try direct request with minimal packet format
+    printf("\n---- Trying minimal format direct row request ----\n");
+    
+    for (int row = 0; row < 12; row++) {
+        if (rows_received[row]) continue; // Skip rows we already have
+        
+        uint8_t directCmd[64] = {0};
+        directCmd[0] = 0xaa;      // preamble code
+        directCmd[1] = 0x01;      // command (try control command instead)
+        directCmd[2] = 0x04;      // data length (shorter)
+        directCmd[3] = 0x22;      // capture command 
+        directCmd[4] = (chan-1);  // channel
+        directCmd[5] = row;       // row number
+        
+        // Calculate checksum
+        directCmd[15] = 0;
+        for (int i = 1; i <= 14; i++) {
+            directCmd[15] += directCmd[i];
+        }
+        if (directCmd[15] == 0x17) 
+            directCmd[15] = 0x18;
+        
+        directCmd[16] = 0x17;     // back code
+        directCmd[17] = 0x17;     // back code
+        
+        printf("\nRequesting row %d with minimal format...\n", row);
+        g_DirectUSB.SendReport(directCmd, 64);
+        
+        // Wait for responses
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Wait for device to process
+        
+        int row_responses = 0;
+        auto row_start_time = std::chrono::high_resolution_clock::now();
+        
+        while (true) {
+            // Check timeout (3 seconds per row)
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - row_start_time);
+            if (elapsed.count() >= 3) {
+                printf("3 second timeout reached for row %d after %d responses\n", row, row_responses);
+                break;
+            }
+            
+            // Try to get a response
+            std::vector<uint8_t> report;
+            if (g_DirectUSB.GetNextReport(report, 300)) {
+                row_responses++;
+                responses++;
+                
+                // Log raw data
+                printf("\nResponse %d received with %zu bytes:\n", row_responses, report.size());
+                for (size_t i = 0; i < report.size(); i += 16) {
+                    printf("  ");
+                    for (size_t j = 0; j < 16 && i+j < report.size(); j++) {
+                        printf("%02X ", report[i+j]);
+                    }
+                    printf("\n");
+                }
+                
+                // Basic packet analysis and attempt to extract any data
+                if (report.size() > 5) {
+                    printf("Analysis: ");
+                    if (report[0] == 0xAA) {
+                        printf("Valid preamble, ");
+                        printf("Command=0x%02X, ", report[2]);
+                        if (report[2] == 0x01) {
+                            printf("ACK packet, Response=0x%02X\n", report[5]);
+                        }
+                        else if (report[2] == 0x02 || report[2] == 0x1C) {
+                            printf("Data packet, Row=%d\n", report[5]);
+                            
+                            // Check if this is a row data packet
+                            if (report.size() >= 30 && report[5] < 12) {
+                                // Process the row data
+                                uint8_t row_idx = report[5];
+                                
+                                for (int i = 0; i < 12; i++) {
+                                    uint8_t high_byte = report[6 + i * 2];
+                                    uint8_t low_byte = report[7 + i * 2];
+                                    uint16_t value = (high_byte << 8) | low_byte;
+                                    frame_data[row_idx][i] = value;
+                                }
+                                
+                                // Mark row as received
+                                if (!rows_received[row_idx]) {
+                                    rows_received[row_idx] = true;
+                                    total_rows++;
+                                    printf("Successfully processed row %d data (%d/12 total)\n", 
+                                           row_idx, total_rows);
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        printf("Invalid preamble (0x%02X)\n", report[0]);
+                    }
+                }
+            }
+            else {
+                printf("No response within 300ms timeout\n");
+                if (row_responses > 0) break; // Move to next row if we got any responses
+            }
+        }
+        
+        // Wait between row requests
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
     // Stop the async read thread
@@ -849,6 +1141,7 @@ int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
     
     // Report results
     printf("\n==== DIRECT USB CAPTURE COMPLETE ====\n");
+    printf("Total responses received: %d\n", responses);
     printf("Received %d/12 rows\n", total_rows);
     printf("Rows received: ");
     for (int i = 0; i < 12; i++) {
@@ -856,114 +1149,74 @@ int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
     }
     printf("\n");
     
-    // If we're missing rows, try to get them individually
-    if (total_rows < 12) {
-        printf("\n==== REQUESTING MISSING ROWS INDIVIDUALLY ====\n");
-        
-        // Create list of missing rows
-        std::vector<int> missing_rows;
+    // Output frame data for debugging
+    if (total_rows > 0) {
+        printf("\nFrame data for received rows:\n");
         for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) {
-                missing_rows.push_back(i);
-            }
-        }
-        
-        printf("Missing rows: ");
-        for (int row : missing_rows) {
-            printf("%d ", row);
-        }
-        printf("\n");
-        
-        // Request each missing row
-        for (int row : missing_rows) {
-            // Restart async read for this row
-            g_DirectUSB.StartAsyncRead();
-            
-            printf("Requesting row %d...\n", row);
-            
-            // Format command for specific row
-            TxData[0] = 0xaa;      // preamble code
-            TxData[1] = 0x02;      // command
-            TxData[2] = 0x0C;      // data length
-            TxData[3] = ((chan-1) << 4) | 0x42;  // Special type for direct row request
-            TxData[4] = row;       // Request specific row
-            TxData[5] = 0x01;      // Flag for specific row
-            
-            // Zero out the rest
-            for (int i = 6; i < 15; i++) TxData[i] = 0x00;
-            
-            // Calculate checksum
-            TxData[15] = 0;
-            for (int i = 1; i <= 14; i++) {
-                TxData[15] += TxData[i];
-            }
-            if (TxData[15] == 0x17) 
-                TxData[15] = 0x18;
-            
-            TxData[16] = 0x17;     // back code
-            TxData[17] = 0x17;     // back code
-            
-            // Send command
-            g_DirectUSB.SendReport(TxData, 64);
-            std::memset(TxData, 0, sizeof(TxData));
-            
-            // Wait for response
-            bool got_row = false;
-            int attempts = 0;
-            const int MAX_ATTEMPTS = 5;
-            
-            while (!got_row && attempts < MAX_ATTEMPTS) {
-                std::vector<uint8_t> report;
-                if (g_DirectUSB.GetNextReport(report, 300)) {
-                    // Copy to RxData for processing
-                    std::memcpy(RxData, report.data(), std::min(report.size(), (size_t)RxNum));
-                    
-                    // Extract packet info
-                    uint8_t cmd_type = RxData[2];
-                    uint8_t row_idx = RxData[5];
-                    
-                    // Check if this is the row we requested
-                    if ((cmd_type == 0x1c || cmd_type == 0x02) && row_idx == row) {
-                        // Process the data
-                        for (int i = 0; i < 12; i++) {
-                            uint8_t high_byte = RxData[6 + i * 2];
-                            uint8_t low_byte = RxData[7 + i * 2];
-                            uint16_t value = (high_byte << 8) | low_byte;
-                            frame_data[row][i] = value;
-                        }
-                        
-                        rows_received[row] = true;
-                        total_rows++;
-                        printf("Successfully received row %d (%d/12 total)\n", row, total_rows);
-                        
-                        got_row = true;
-                    }
+            if (rows_received[i]) {
+                printf("Row %2d: ", i);
+                for (int j = 0; j < 12; j++) {
+                    printf("%5d ", frame_data[i][j]);
                 }
-                else {
-                    printf("No response for row %d (attempt %d/%d)\n", 
-                           row, attempts + 1, MAX_ATTEMPTS);
-                }
-                
-                attempts++;
+                printf("\n");
             }
-            
-            // Stop async read for this row
-            g_DirectUSB.StopAsyncRead();
-            
-            if (!got_row) {
-                printf("Failed to get row %d after %d attempts\n", row, MAX_ATTEMPTS);
-            }
-            
-            // Wait between row requests
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
     
-    // Fill in any missing rows with interpolation (same as current code)
-    if (total_rows < 12) {
+    // Fill in any missing rows with interpolation (similar to existing code)
+    if (total_rows < 12 && total_rows > 0) {
         printf("\n==== FILLING MISSING ROWS ====\n");
-        // (existing interpolation code)
+        // (interpolation code - keep existing implementation)
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) {
+                // Find adjacent rows
+                int prev = i - 1;
+                while (prev >= 0 && !rows_received[prev]) prev--;
+
+                int next = i + 1;
+                while (next < 12 && !rows_received[next]) next++;
+
+                if (prev >= 0 && next < 12 && rows_received[prev] && rows_received[next]) {
+                    printf("Interpolating row %d between rows %d and %d\n", i, prev, next);
+                    // Weighted average interpolation
+                    float prev_weight = (float)(next - i) / (next - prev);
+                    float next_weight = (float)(i - prev) / (next - prev);
+
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = (int)(prev_weight * frame_data[prev][j] +
+                            next_weight * frame_data[next][j]);
+                    }
+                }
+                else if (prev >= 0 && rows_received[prev]) {
+                    printf("Copying from previous row %d to %d\n", prev, i);
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = frame_data[prev][j];
+                    }
+                }
+                else if (next < 12 && rows_received[next]) {
+                    printf("Copying from next row %d to %d\n", next, i);
+                    for (int j = 0; j < 12; j++) {
+                        frame_data[i][j] = frame_data[next][j];
+                    }
+                }
+            }
+        }
     }
     
     return total_rows;
+}
+
+// Update CaptureFrame12 to use the new detailed USB capture
+int CInterfaceObject::CaptureFrame12(uint8_t chan)
+{
+    // Try the detailed direct USB capture first
+    int direct_result = DirectUSBCapture12(chan);
+    
+    // If direct USB failed completely, fall back to the Windows style
+    if (direct_result <= 0) {
+        printf("\nDirect USB capture failed, falling back to Windows style capture...\n");
+        return WindowsStyleCapture12(chan);
+    }
+    
+    return direct_result;
 }
