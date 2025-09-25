@@ -166,56 +166,87 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting Windows-style blocking capture for channel %d\n", chan);
+    printf("Starting direct USB capture for channel %d\n", chan);
 
-    // Drain buffer first
+    // Completely drain any pending data
     int drained = 0;
     while (ReadHIDInputReportFromQueue()) { drained++; }
     printf("Drained %d stale packets\n", drained);
+
+    // Initialize tracking arrays
+    bool rows_received[12] = { false };
+    int total_rows = 0;
+
+    // Ensure device handle is in blocking mode for this operation
+#ifdef __linux__
+    if (DeviceHandle) {
+        // Force blocking mode temporarily
+        printf("Switching to blocking mode for direct capture\n");
+        hid_set_nonblocking(DeviceHandle, 0);
+    }
+#endif
 
     // Issue capture command
     m_TrimReader.Capture12(chan);
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
 
-    // Read and process result - use blocking reads like Windows does
+    // Use direct reads from the device, bypassing our queue system
+    printf("Reading data with direct USB reads...\n");
     Continue_Flag = true;
-    int rows_processed = 0;
-    int timeout_counter = 0;
-    const int MAX_TIMEOUT = 100; // 10 seconds total timeout
+    unsigned char raw_report[HIDREPORTNUM] = { 0 };
 
-    printf("Reading data with blocking approach...\n");
+    // Continue until we get all rows or time out
+    const int MAX_ATTEMPTS = 24; // Expect at most 2x the number of rows
+    int attempts = 0;
 
-    // Initialize all frame data to zeros
-    for (int i = 0; i < 12; i++) {
-        for (int j = 0; j < 12; j++) {
-            frame_data[i][j] = 0;
-        }
-    }
+    while (Continue_Flag && attempts < MAX_ATTEMPTS && total_rows < 12) {
+        // Direct read from USB with reasonable timeout (250ms)
+        int res = hid_read_timeout(DeviceHandle, raw_report, HIDREPORTNUM, 250);
 
-    while (Continue_Flag && timeout_counter < MAX_TIMEOUT) {
-        // Use blocking read with timeout (100ms)
-        if (ReadHIDInputReportBlocking(100)) {
-            printf("Got row %d\n", RxData[4]);
-            ProcessRowData();
-            rows_processed++;
-            timeout_counter = 0; // Reset timeout on successful read
+        if (res > 0) {
+            // Copy to our global buffer for processing
+            std::memcpy(RxData, &raw_report[1], RxNum);
 
-            // Check if we've received all 12 rows
-            if (rows_processed >= 12) {
-                printf("All rows received, ending capture\n");
-                break;
+            uint8_t row = RxData[4];
+            printf("Direct read: Got row %d\n", row);
+
+            if (row < 12 && !rows_received[row]) {
+                ProcessRowData();
+                rows_received[row] = true;
+                total_rows++;
+                printf("Processed row %d (%d/12 rows)\n", row, total_rows);
             }
+
+            // Reset timeout counter on successful read
+            attempts = 0;
         }
         else {
-            timeout_counter++;
-            printf("Timeout %d/%d\n", timeout_counter, MAX_TIMEOUT);
+            attempts++;
+            printf("Direct read timeout %d/%d\n", attempts, MAX_ATTEMPTS);
         }
     }
 
-    printf("Capture complete - processed %d rows\n", rows_processed);
+#ifdef __linux__
+    // Restore non-blocking mode for our thread
+    if (DeviceHandle) {
+        printf("Restoring non-blocking mode\n");
+        hid_set_nonblocking(DeviceHandle, 1);
+    }
+#endif
+
+    // Report results
+    printf("Direct capture complete - received %d/12 rows\n", total_rows);
+    if (total_rows < 12) {
+        printf("Missing rows:");
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) printf(" %d", i);
+        }
+        printf("\n");
+    }
+
     Continue_Flag = false;
-    return (rows_processed > 0) ? 0 : 1;
+    return (total_rows > 0) ? 0 : 1;
 }
 
 int CInterfaceObject::CaptureFrame24()
