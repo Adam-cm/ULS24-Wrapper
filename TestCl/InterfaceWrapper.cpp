@@ -98,6 +98,11 @@ extern "C" {
         return static_cast<int>(GetBufferSize());
     }
 
+    // Export the check_data_flow function that's defined in HidMgr.cpp
+    EXPORT int check_data_flow() {
+        return ::check_data_flow();
+    }
+
     EXPORT int get_buffer_stats(int* stats, int length) {
         if (length >= 3) {
             stats[0] = CIRCULAR_BUFFER_SIZE;
@@ -106,5 +111,25 @@ extern "C" {
             return 3;
         }
         return 0;
+    }
+
+    // Add this function to cancel captures
+    EXPORT void cancel_capture() {
+        if (DeviceHandle) {
+            Continue_Flag = false;
+        }
+    }
+
+    // Add this function for Raspberry Pi optimization
+    EXPORT void optimize_for_pi() {
+#ifdef __linux__
+        // Try to lock memory to prevent paging
+        mlockall(MCL_CURRENT | MCL_FUTURE);
+
+        // Set process priority
+        setpriority(PRIO_PROCESS, 0, -20);
+
+        printf("Applied Raspberry Pi optimizations\n");
+#endif
     }
 }
