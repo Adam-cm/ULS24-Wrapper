@@ -25,6 +25,8 @@ bool DeviceNameMatch(LPARAM lParam);
 
 extern int Continue_Flag;
 
+
+
 #define TxNum 64        // the number of the buffer for sent data to HID
 #define RxNum 64        // the number of the buffer for received data from HID
 
@@ -75,6 +77,23 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms = 1000);
 bool WriteHIDOutputReport(int length);
 void WriteHIDOutputReport(void);
 void ReadHIDInputReport(void);
+
+// Add these declarations
+extern bool MyDeviceDetected;
+extern int Continue_Flag;
+extern bool ee_continue;
+extern int chan_num;
+
+// Windows-specific declarations when compiling on Windows
+#ifdef _WIN32
+extern HANDLE ReadHandle;
+extern HANDLE hEventObject;
+#endif
+
+// Function declarations (already present)
+void ReadHIDInputReport();
+void CloseHandles();
+bool WriteHIDOutputReport(int length = HIDREPORTNUM);
 
 #ifdef __cplusplus
 extern "C" {

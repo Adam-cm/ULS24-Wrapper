@@ -803,53 +803,64 @@ void CTrimReader::SelSensor(uint8_t i)
 
 int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
 {
-	int result;
-	int flag, ncol = 12;
-	int FrameSize = 0;
+    int result;
+    int flag, ncol = 12;
+    int FrameSize = 0;
 
-	// Get the data type from the correct location in RxData
-	uint8_t type = RxData[4];    // data type
+    // Debug the received data
+    printf("Debug RxData: cmd=%02x type=%02x row=%02x\n", RxData[2], RxData[4], RxData[5]);
+    
+    // Get the data type from the correct location
+    uint8_t type = RxData[4];    // data type
+    uint8_t row = RxData[5];     // row number
 
-	// Determine frame size based on data type
-	switch (type)
-	{
-	case dppage12:        // 12x12 frame
-		ncol = 12;
-		FrameSize = 0;
-		break;
+    // Determine frame size based on data type
+    switch (type & 0x0F)  // Use only the lower 4 bits for frame type
+    {
+    case dppage12:        // 12x12 frame
+        ncol = 12;
+        FrameSize = 0;
+        break;
 
-	case dppage24:        // 24x24 frame
-		ncol = 24;
-		FrameSize = 1;
-		break;
+    case dppage24:        // 24x24 frame
+        ncol = 24;
+        FrameSize = 1;
+        break;
 
-	default:
-		break;
-	}
+    default:
+        printf("Warning: Unknown frame type: %02x\n", type);
+        break;
+    }
 
-	// In the Windows version, the row number is in RxData[5]
-	unsigned int rn = RxData[5];
+    // Process each column for this row
+    for (int i = 0; i < ncol; i++)
+    {
+        // Windows code uses data stride of 2 with low byte first, high byte second
+        // The data starts at offset 6
+        uint8_t low_byte = RxData[i*2+6];
+        uint8_t high_byte = RxData[i*2+7];
+        
+        // Print a sample of the data for debugging
+        if (i < 2) {
+            printf("Data[%d,%d]: low=%02x high=%02x\n", row, i, low_byte, high_byte);
+        }
+        
+        result = ADCCorrectioni(i, high_byte, low_byte, ncol, chan_num, gain_mode, &flag);
+        
+        // Store the result in the data array
+        adc_data[row][i] = result;
+        
+        // Ensure no negative values
+        if (adc_data[row][i] < 0) adc_data[row][i] = 0;
+    }
 
-	// Process each column for this row
-	for (int i = 0; i < ncol; i++)
-	{
-		// Windows code uses data stride of 2 with low byte first, high byte second
-		// The data starts at offset 6
-		result = ADCCorrectioni(i, RxData[i * 2 + 7], RxData[i * 2 + 6], ncol, chan_num, gain_mode, &flag);
+    // Check for end signal (0x0b) which would terminate the capture
+    if (row == 0x0b) {
+        Continue_Flag = false;
+        printf("End signal detected in row data\n");
+    }
 
-		// Store the result in the data array
-		adc_data[rn][i] = result;
-
-		// Ensure no negative values
-		if (adc_data[rn][i] < 0) adc_data[rn][i] = 0;
-	}
-
-	// Check for end signal (0x0b) which would terminate the capture
-	if (rn == 0x0b) {
-		Continue_Flag = false;
-	}
-
-	return FrameSize;
+    return FrameSize;
 }
 
 uint8_t CTrimReader::TrimBuff2Byte()
@@ -1168,6 +1179,7 @@ void  CTrimReader::CopyEepromBuff(int k, int index_start)
 	}
 	//#endif
 }
+
 
 
 

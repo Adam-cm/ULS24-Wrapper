@@ -169,7 +169,7 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting Windows-compatible capture for channel %d\n", chan);
+    printf("Starting enhanced Windows-compatible capture for channel %d\n", chan);
 
     // Initialize for proper row tracking without interpolation
     bool rows_received[12] = { false };
@@ -209,10 +209,12 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     while (Continue_Flag && reads < MAX_READS) {
         ReadHIDInputReport();
 
-        // Check if we got valid data
+        // Check if we got valid data - debug the packet structure
         uint8_t cmd_type = RxData[2];  // Command type from device
         uint8_t row_type = RxData[4];  // Row type from device
         uint8_t row = RxData[5];       // Row number
+
+        printf("Packet %d: cmd=0x%02x type=0x%02x row=0x%02x\n", reads, cmd_type, row_type, row);
 
         // Windows code checks for specific end patterns
         if ((row == 0x0b) || (row == 0xf1)) {
@@ -224,19 +226,16 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             break;
         }
 
-        // Update chan_num as done in Windows code (only if this is valid data)
-        if ((row_type & 0xF0) > 0) {
-            chan_num = ((row_type & 0xF0) >> 4) + 1;
-        }
+        // Process the data exactly as Windows does if this is a valid row
+        if (row < 12) {
+            ProcessRowData();
 
-        // Process the data exactly as Windows does
-        ProcessRowData();
-
-        // Track the rows we've received
-        if (row < 12 && !rows_received[row]) {
-            rows_received[row] = true;
-            total_rows++;
-            printf("Got row %d (%d/12 total)\n", row, total_rows);
+            // Track the rows we've received
+            if (!rows_received[row]) {
+                rows_received[row] = true;
+                total_rows++;
+                printf("Got row %d (%d/12 total)\n", row, total_rows);
+            }
         }
 
         // Clear RxData as Windows does

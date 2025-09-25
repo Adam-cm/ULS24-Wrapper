@@ -304,6 +304,159 @@ bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
     return false;
 }
 
+// Add these at the top for Windows-specific components
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+// Define Windows structures and variables for cross-platform code
+#ifdef _WIN32
+HANDLE ReadHandle = INVALID_HANDLE_VALUE;
+HANDLE hEventObject = NULL;
+DWORD NumberOfBytesRead = 0;
+OVERLAPPED HIDOverlapped = { 0 };
+unsigned char InputReport[HIDREPORTNUM] = { 0 };
+struct {
+    ULONG InputReportByteLength;
+    // Add any other needed fields
+} Capabilities = { 0 };
+bool MyDeviceDetected = false;
+#else
+// Non-Windows placeholders
+typedef int DWORD;
+#define WAIT_OBJECT_0 0
+#define WAIT_TIMEOUT 258
+unsigned char InputReport[HIDREPORTNUM] = { 0 };
+bool MyDeviceDetected = false;
+#endif
+
+// Replace the current ReadHIDInputReport with this platform-specific implementation
+void ReadHIDInputReport()
+{
+#ifdef _WIN32
+    // Windows implementation
+    DWORD Result;
+
+    InputReport[0] = 0;  // The first byte is the report number
+
+    if (ReadHandle != INVALID_HANDLE_VALUE) {
+        Result = ReadFile(ReadHandle, InputReport, Capabilities.InputReportByteLength,
+            &NumberOfBytesRead, (LPOVERLAPPED)&HIDOverlapped);
+    }
+
+    // Wait for data with appropriate timeout
+    Result = WaitForSingleObject(hEventObject, 2000); // 2 second timeout
+
+    switch (Result) {
+    case WAIT_OBJECT_0:
+    {
+        // Copy data from InputReport to RxData (skipping report ID)
+        for (int k = 0; k < RxNum; k++) {
+            RxData[k] = InputReport[k + 1];
+        }
+
+        // Check the command type and row type for debugging
+        uint8_t cmd = RxData[2];  // Command type 
+        uint8_t type = RxData[4]; // Row type
+        uint8_t row = RxData[5];  // Row number
+
+        printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd, type, row);
+
+        // Process based on command type
+        if (cmd == 0x02) {  // Frame data command
+            if ((type & 0x0F) == 0x02 || (type & 0x0F) == 0x22) {  // 12x12 frame
+                // Get channel from the upper nibble of type
+                chan_num = ((type & 0xF0) >> 4) + 1;
+
+                // Check for end signal
+                if (row == 0x0b || row == 0xf1) {
+                    Continue_Flag = false;
+                    printf("End signal detected: 0x%02x\n", row);
+                }
+                else {
+                    Continue_Flag = true;
+                }
+            }
+            else if ((type & 0x0F) == 0x08) {  // 24x24 frame
+                if (row == 0x17) {
+                    Continue_Flag = false;
+                }
+                else {
+                    Continue_Flag = true;
+                }
+            }
+        }
+        break;
+    }
+
+    case WAIT_TIMEOUT:
+        printf("ReadFile timeout - device may be disconnected\n");
+        CancelIo(ReadHandle);
+        CloseHandles();
+        MyDeviceDetected = false;
+        break;
+
+    default:
+        printf("Error reading from device\n");
+        CloseHandles();
+        MyDeviceDetected = false;
+        break;
+    }
+
+    // Reset the event object for the next read
+    ResetEvent(hEventObject);
+#else
+    // Linux/non-Windows implementation - use hidapi directly
+    unsigned char buffer[HIDREPORTNUM] = { 0 };
+    int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 1000);
+
+    if (res > 0) {
+        // Copy data from buffer to RxData (skipping report ID)
+        std::memcpy(RxData, &buffer[1], RxNum);
+
+        // Process the data as needed
+        uint8_t cmd = RxData[2];  // Command type 
+        uint8_t type = RxData[4]; // Row type
+        uint8_t row = RxData[5];  // Row number
+
+        printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd, type, row);
+
+        // Process based on command type
+        if (cmd == 0x02) {  // Frame data command
+            if ((type & 0x0F) == 0x02 || (type & 0x0F) == 0x22) {  // 12x12 frame
+                // Get channel from the upper nibble of type
+                chan_num = ((type & 0xF0) >> 4) + 1;
+
+                // Check for end signal
+                if (row == 0x0b || row == 0xf1) {
+                    Continue_Flag = false;
+                    printf("End signal detected: 0x%02x\n", row);
+                }
+                else {
+                    Continue_Flag = true;
+                }
+            }
+            else if ((type & 0x0F) == 0x08) {  // 24x24 frame
+                if (row == 0x17) {
+                    Continue_Flag = false;
+                }
+                else {
+                    Continue_Flag = true;
+                }
+            }
+        }
+    }
+    else if (res < 0) {
+        printf("Error reading from device\n");
+        CloseHandles();
+        g_DeviceDetected = false;
+        MyDeviceDetected = false;
+    }
+    else {
+        // No data available (timeout)
+    }
+#endif
+}
+
 // C-style wrappers for compatibility
 void WriteHIDOutputReport(void) { WriteHIDOutputReport(HIDREPORTNUM); }
-void ReadHIDInputReport(void) { ReadHIDInputReportBlocking(); } // This is fine as it uses the default parameter
