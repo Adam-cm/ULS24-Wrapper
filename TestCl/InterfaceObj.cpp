@@ -166,11 +166,12 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting optimized capture for channel %d\n", chan);
+    printf("Starting comprehensive multi-pass capture for channel %d\n", chan);
 
     // Initialize tracking arrays
     bool rows_received[12] = { false };
     int total_rows = 0;
+    int attempts_per_approach = 0;
 
 #ifdef __linux__
     if (DeviceHandle) {
@@ -183,87 +184,209 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // First send capture command exactly as in original Windows version
-    printf("Sending capture command for all rows\n");
+    // We'll use multiple different approaches until we get all rows
+    const int MAX_APPROACHES = 8;
 
-    // This follows the exact format from Windows code
-    TxData[0] = 0xaa;       // preamble code
-    TxData[1] = 0x02;       // command
-    TxData[2] = 0x0C;       // data length
-    TxData[3] = ((chan - 1) << 4) | 0x02;  // data type with channel in high nibble
-    TxData[4] = 0xff;       // real data
-    TxData[5] = 0x00;
-    TxData[6] = 0x00;
-    TxData[7] = 0x00;
-    TxData[8] = 0x00;
-    TxData[9] = 0x00;
-    TxData[10] = 0x00;
-    TxData[11] = 0x00;
-    TxData[12] = 0x00;
-    TxData[13] = 0x00;
-    TxData[14] = 0x00;
+    for (int approach = 0; approach < MAX_APPROACHES && total_rows < 12; approach++) {
+        // Configure the command based on the current approach
+        TxData[0] = 0xaa;       // preamble code
+        TxData[1] = 0x02;       // command
+        TxData[2] = 0x0C;       // data length
 
-    // Calculate checksum exactly as in Windows
-    TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] +
-        TxData[6] + TxData[7] + TxData[8] + TxData[9] + TxData[10] +
-        TxData[11] + TxData[12] + TxData[13] + TxData[14];
+        // Vary the command parameters based on the approach
+        switch (approach) {
+        case 0:
+            // Standard approach - gets odd-indexed rows typically
+            printf("\nApproach 1: Standard capture command\n");
+            TxData[3] = ((chan - 1) << 4) | 0x02;
+            attempts_per_approach = 20;
+            break;
 
-    if (TxData[15] == 0x17)
-        TxData[15] = 0x18;
+        case 1:
+            // Modified command to get rows 2, 6, 10
+            printf("\nApproach 2: Targeting rows 2, 6, 10\n");
+            TxData[3] = ((chan - 1) << 4) | 0x02;
+            TxData[4] = 0x80;  // Set high bit
+            attempts_per_approach = 20;
+            break;
 
-    TxData[16] = 0x17;      // back code
-    TxData[17] = 0x17;      // back code
+        case 2:
+            // Specific command for rows 4, 8
+            printf("\nApproach 3: Targeting rows 4, 8\n");
+            TxData[3] = ((chan - 1) << 4) | 0x03;  // Different command type
+            attempts_per_approach = 20;
+            break;
 
-    WriteHIDOutputReport();
-    std::memset(TxData, 0, sizeof(TxData));
+        case 3:
+            // Try with bit 7 in channel
+            printf("\nApproach 4: Alternate channel bitmask\n");
+            TxData[3] = ((chan - 1) << 4) | 0x02;
+            TxData[4] = chan | 0x80;
+            attempts_per_approach = 15;
+            break;
 
-    // First pass: Get as many rows as we can
-    printf("Reading rows with ID-based mapping\n");
-    Continue_Flag = true;
+        case 4:
+            // Try a reset + standard command
+            printf("\nApproach 5: Reset device + standard capture\n");
+            // Send a reset command first
+            unsigned char reset_cmd[9] = { 0xaa, 0x10, 0x01, 0x00, 0x00, 0x11, 0x17, 0x17 };
+            unsigned char reset_buffer[HIDREPORTNUM] = { 0 };
+            reset_buffer[0] = 0; // Report ID
+            std::memcpy(&reset_buffer[1], reset_cmd, 8);
+            hid_write(DeviceHandle, reset_buffer, HIDREPORTNUM);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    // Process all available rows
-    for (int read_attempt = 0; read_attempt < 30 && total_rows < 12; read_attempt++) {
-        unsigned char buffer[HIDREPORTNUM];
-        int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+            // Then standard command
+            TxData[3] = ((chan - 1) << 4) | 0x02;
+            attempts_per_approach = 25;
+            break;
 
-        if (res > 0) {
-            std::memcpy(RxData, &buffer[1], RxNum);
+        case 5:
+            // Try with a longer timeout and specific command type
+            printf("\nApproach 6: Longer timeout with specific command\n");
+            TxData[3] = ((chan - 1) << 4) | 0x04;  // Different command type
+            attempts_per_approach = 30;
+            break;
 
-            // Get row ID from packet
-            uint8_t row_id = RxData[4];
-            uint8_t mapped_row;
+        case 6:
+            // Try 0x26 type command directly (from windows code)
+            printf("\nApproach 7: Using 0x26 type command\n");
+            TxData[0] = 0xaa;       // preamble code
+            TxData[1] = 0x01;       // command
+            TxData[2] = 0x03;       // data length
+            TxData[3] = 0x26;       // data type from windows
+            TxData[4] = chan - 1;   // channel index
+            TxData[5] = 0x00;
+            attempts_per_approach = 25;
+            break;
 
-            // Map row IDs to actual row numbers based on known protocol
-            switch (row_id) {
-            case 0: mapped_row = 0; break;
-            case 1: mapped_row = 1; break;
-            case 2: mapped_row = 4; break; // Key mapping
-            case 3: mapped_row = 3; break;
-            case 4: mapped_row = 8; break; // Key mapping
-            case 5: mapped_row = 5; break;
-            case 6: mapped_row = 6; break;
-            case 7: mapped_row = 7; break;
-            case 8: mapped_row = 2; break; // Key mapping
-            case 9: mapped_row = 9; break;
-            case 10: mapped_row = 10; break;
-            case 11: mapped_row = 11; break;
-            default: mapped_row = row_id;
+        case 7:
+            // Try 0x28 type command for specific rows
+            printf("\nApproach 8: Using 0x28 type command\n");
+            TxData[0] = 0xaa;       // preamble code
+            TxData[1] = 0x01;       // command
+            TxData[2] = 0x03;       // data length
+            TxData[3] = 0x28;       // different data type
+            TxData[4] = chan;       // channel
+            TxData[5] = 0x00;
+            attempts_per_approach = 25;
+            break;
+        }
+
+        // Fill in the rest of the data field with zeros if not explicitly set
+        for (int i = 4; i < 15 && approach < 6; i++) {
+            if (i == 4 && (approach == 1 || approach == 3)) {
+                // Skip if we explicitly set this byte
+            }
+            else {
+                TxData[i] = 0x00;
+            }
+        }
+
+        // Calculate checksum
+        if (approach < 6) {
+            TxData[15] = 0;
+            for (int i = 1; i < 15; i++) {
+                TxData[15] += TxData[i];
             }
 
-            if (mapped_row < 12 && !rows_received[mapped_row]) {
-                // CRITICAL: Always use ProcessRowData to correctly handle the data
-                ProcessRowData();
-                rows_received[mapped_row] = true;
-                total_rows++;
-                printf("Got row %d (mapped from ID %d) - %d/12 total\n",
-                    mapped_row, row_id, total_rows);
-            }
+            if (TxData[15] == 0x17)
+                TxData[15] = 0x18;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            TxData[16] = 0x17;      // back code
+            TxData[17] = 0x17;      // back code
         }
         else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // For approaches 6-7 (custom commands)
+            TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];
+            if (TxData[6] == 0x17)
+                TxData[6] = 0x18;
+
+            TxData[7] = 0x17;      // back code
+            TxData[8] = 0x17;      // back code
         }
+
+        // Send command
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
+
+        // Read responses
+        printf("Reading with %d attempts...\n", attempts_per_approach);
+        for (int attempt = 0; attempt < attempts_per_approach && total_rows < 12; attempt++) {
+            unsigned char buffer[HIDREPORTNUM];
+            int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+
+            if (res > 0) {
+                std::memcpy(RxData, &buffer[1], RxNum);
+
+                // Map row IDs to actual row numbers based on approach
+                uint8_t row_id = RxData[4];
+                uint8_t mapped_row;
+
+                if (approach == 1) {
+                    // For approach 1, interpret differently
+                    switch (row_id) {
+                    case 1: mapped_row = 2; break;
+                    case 3: mapped_row = 6; break;
+                    case 5: mapped_row = 10; break;
+                    default: mapped_row = row_id; break;
+                    }
+                }
+                else if (approach == 2) {
+                    // For approach 2, interpret differently
+                    switch (row_id) {
+                    case 2: mapped_row = 4; break;
+                    case 4: mapped_row = 8; break;
+                    default: mapped_row = row_id; break;
+                    }
+                }
+                else {
+                    // Standard row mapping based on observed behavior
+                    switch (row_id) {
+                    case 0: mapped_row = 0; break;
+                    case 1: mapped_row = 1; break;
+                    case 2: mapped_row = 4; break; // Key mapping
+                    case 3: mapped_row = 3; break;
+                    case 4: mapped_row = 8; break; // Key mapping
+                    case 5: mapped_row = 5; break;
+                    case 6: mapped_row = 6; break;
+                    case 7: mapped_row = 7; break;
+                    case 8: mapped_row = 2; break; // Key mapping
+                    case 9: mapped_row = 9; break;
+                    case 10: mapped_row = 10; break;
+                    case 11: mapped_row = 11; break;
+                    default: mapped_row = row_id; break;
+                    }
+                }
+
+                if (mapped_row < 12 && !rows_received[mapped_row]) {
+                    ProcessRowData();
+                    rows_received[mapped_row] = true;
+                    total_rows++;
+                    printf("Got row %d (mapped from ID %d) - %d/12 total\n",
+                        mapped_row, row_id, total_rows);
+                }
+            }
+
+            // Short delay between reads
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        // Check if we have all rows
+        printf("After approach %d: %d/12 rows received\n", approach + 1, total_rows);
+    }
+
+    // Print final status
+    printf("\nFinal capture status: %d/12 rows received\n", total_rows);
+    if (total_rows < 12) {
+        printf("Missing rows:");
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) printf(" %d", i);
+        }
+        printf("\n");
+    }
+    else {
+        printf("SUCCESS! All rows received directly from device - no interpolation needed.\n");
     }
 
 #ifdef __linux__
@@ -275,72 +398,8 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Final report and interpolation for missing rows
-    printf("Capture complete - received %d/12 rows\n", total_rows);
-
-    if (total_rows < 12) {
-        printf("Missing rows:");
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) printf(" %d", i);
-        }
-        printf("\n");
-
-        printf("Filling missing rows with interpolation\n");
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) {
-                int prev_row = -1, next_row = -1;
-
-                // Find previous valid row
-                for (int j = i - 1; j >= 0; j--) {
-                    if (rows_received[j]) {
-                        prev_row = j;
-                        break;
-                    }
-                }
-
-                // Find next valid row
-                for (int j = i + 1; j < 12; j++) {
-                    if (rows_received[j]) {
-                        next_row = j;
-                        break;
-                    }
-                }
-
-                // Interpolate
-                if (prev_row >= 0 && next_row >= 0) {
-                    // Linear interpolation
-                    float weight = float(i - prev_row) / (next_row - prev_row);
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = static_cast<int>(
-                            frame_data[prev_row][j] * (1.0f - weight) +
-                            frame_data[next_row][j] * weight + 0.5f);
-                    }
-                    printf("Interpolated row %d between rows %d and %d\n",
-                        i, prev_row, next_row);
-                }
-                else if (prev_row >= 0) {
-                    // Copy from previous row
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = frame_data[prev_row][j];
-                    }
-                    printf("Copied row %d from row %d\n", i, prev_row);
-                }
-                else if (next_row >= 0) {
-                    // Copy from next row
-                    for (int j = 0; j < 12; j++) {
-                        frame_data[i][j] = frame_data[next_row][j];
-                    }
-                    printf("Copied row %d from row %d\n", i, next_row);
-                }
-            }
-        }
-    }
-    else {
-        printf("SUCCESS! All 12 rows received\n");
-    }
-
     Continue_Flag = false;
-    return 0;  // Always return success
+    return (total_rows == 12) ? 0 : 1;  // Return success only if we got all rows
 }
 
 int CInterfaceObject::CaptureFrame24()
