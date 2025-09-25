@@ -26,12 +26,6 @@ extern uint8_t RxData[RxNum];
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
-// Forward declaration of the internal C++ check_data_flow function
-// Rename to cpp_check_data_flow to avoid conflict with the C function
-namespace {
-    int cpp_check_data_flow();  // This will be implemented by using the HidMgr.cpp version
-}
-
 // C++ linkage function - KEEP THIS OUTSIDE extern "C" block
 int reset_usb_endpoints() {
 #ifdef __linux__
@@ -43,14 +37,7 @@ int reset_usb_endpoints() {
     return 0;  // Not implemented or failed
 }
 
-// Implement our wrapper to call the C++ function
-namespace {
-    int cpp_check_data_flow() {
-        // This will call the function from HidMgr.cpp
-        return ::check_data_flow();
-    }
-}
-
+// Create C-linkage wrapper functions for our C++ functions
 extern "C" {
     // Channel selection
     EXPORT void selchan(int chan) {
@@ -145,17 +132,18 @@ extern "C" {
         return static_cast<int>(GetBufferSize());
     }
 
-    // Export the check_data_flow function correctly - calls our wrapper
-    EXPORT int check_data_flow() {
-        // Call our wrapper which calls the C++ function
-        return cpp_check_data_flow();
+    // This is our C-linkage wrapper for the C++ check_data_flow function
+    // Give it a different name to avoid the conflict
+    EXPORT int check_data_flow_wrapper() {
+        // Call the C++ function
+        return ::check_data_flow();
     }
 
     EXPORT int get_buffer_stats(int* stats, int length) {
         if (length >= 3) {
             stats[0] = CIRCULAR_BUFFER_SIZE;
             stats[1] = static_cast<int>(GetBufferSize());
-            stats[2] = cpp_check_data_flow();  // Use our wrapper
+            stats[2] = ::check_data_flow();  // Use the C++ function directly
             return 3;
         }
         return 0;
