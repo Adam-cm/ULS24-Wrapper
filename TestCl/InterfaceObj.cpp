@@ -166,69 +166,56 @@ void CInterfaceObject::ProcessRowData()
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    bool rows_received[12] = { false };
-    int total_rows = 0;
-
-    printf("Starting specialized capture for channel %d\n", chan);
+    printf("Starting Windows-style blocking capture for channel %d\n", chan);
 
     // Drain buffer first
     int drained = 0;
     while (ReadHIDInputReportFromQueue()) { drained++; }
     printf("Drained %d stale packets\n", drained);
 
-    // First pass - capture odd rows
+    // Issue capture command
     m_TrimReader.Capture12(chan);
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
 
-    printf("Capturing first pass (odd-indexed rows)\n");
-    auto start_time = std::chrono::steady_clock::now();
-
+    // Read and process result - use blocking reads like Windows does
     Continue_Flag = true;
-    while (Continue_Flag && total_rows < 7) { // We expect 7 odd rows
-        if (ReadHIDInputReportFromQueue()) {
-            uint8_t row = RxData[4];
-            if (row < 12 && !rows_received[row]) {
-                ProcessRowData();
-                rows_received[row] = true;
-                total_rows++;
-                printf("Got row %d (%d/12 total rows)\n", row, total_rows);
+    int rows_processed = 0;
+    int timeout_counter = 0;
+    const int MAX_TIMEOUT = 100; // 10 seconds total timeout
+
+    printf("Reading data with blocking approach...\n");
+
+    // Initialize all frame data to zeros
+    for (int i = 0; i < 12; i++) {
+        for (int j = 0; j < 12; j++) {
+            frame_data[i][j] = 0;
+        }
+    }
+
+    while (Continue_Flag && timeout_counter < MAX_TIMEOUT) {
+        // Use blocking read with timeout (100ms)
+        if (ReadHIDInputReportBlocking(100)) {
+            printf("Got row %d\n", RxData[4]);
+            ProcessRowData();
+            rows_processed++;
+            timeout_counter = 0; // Reset timeout on successful read
+
+            // Check if we've received all 12 rows
+            if (rows_processed >= 12) {
+                printf("All rows received, ending capture\n");
+                break;
             }
         }
         else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-
-            // Add timeout check
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start_time).count();
-            if (elapsed > 1000) break; // 1 second timeout
+            timeout_counter++;
+            printf("Timeout %d/%d\n", timeout_counter, MAX_TIMEOUT);
         }
     }
 
-    // Now generate the even-indexed rows by interpolation
-    printf("Generating missing even rows by interpolation\n");
-
-    for (int i = 2; i <= 10; i += 2) {
-        // Use average of surrounding rows
-        int prev_row = i - 1;
-        int next_row = i + 1;
-
-        if (rows_received[prev_row] && rows_received[next_row]) {
-            for (int j = 0; j < 12; j++) {
-                frame_data[i][j] = (frame_data[prev_row][j] + frame_data[next_row][j]) / 2;
-            }
-            printf("Interpolated row %d using rows %d and %d\n", i, prev_row, next_row);
-            rows_received[i] = true;
-            total_rows++;
-        }
-    }
-
-    // Final report
-    printf("Captured %d/12 rows (%d original, %d interpolated)\n",
-        total_rows, total_rows - 5, (total_rows > 7) ? 5 : 0);
-
+    printf("Capture complete - processed %d rows\n", rows_processed);
     Continue_Flag = false;
-    return (total_rows > 0) ? 0 : 1;
+    return (rows_processed > 0) ? 0 : 1;
 }
 
 int CInterfaceObject::CaptureFrame24()
