@@ -42,6 +42,9 @@ public:
     // Add to the public section of the CInterfaceObject class
     bool ResetUSBEndpoints();
 
+    // Add this to the public section of CInterfaceObject
+    void CompleteCapture12(uint8_t chan);
+
     // Add this to the public section of the CInterfaceObject class
     void CaptureEvenRows(uint8_t chan);
 
