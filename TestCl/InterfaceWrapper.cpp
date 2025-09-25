@@ -44,9 +44,8 @@ extern "C" {
         theInterfaceObject.SelSensor(chan);
     }
 
-    // Frame capture with retries for improved reliability
     EXPORT void get(int chan) {
-        const int MAX_ATTEMPTS = 5;  // Increase retry count
+        const int MAX_ATTEMPTS = 5;
         bool success = false;
 
         printf("Starting capture with up to %d attempts\n", MAX_ATTEMPTS);
@@ -67,16 +66,25 @@ extern "C" {
             // Check if data looks valid even if not all rows were received
             bool hasGaps = false;
             int nonZeroCount = 0;
+            int zeroRowCount = 0;
 
             for (int i = 0; i < 12; i++) {
+                int rowNonZero = 0;
                 for (int j = 0; j < 12; j++) {
                     if (theInterfaceObject.frame_data[i][j] != 0) {
                         nonZeroCount++;
+                        rowNonZero++;
                     }
+                }
+                if (rowNonZero == 0) {
+                    zeroRowCount++;
+                    printf("Warning: Row %d is completely empty\n", i);
                 }
             }
 
-            printf("Frame has %d non-zero values out of 144\n", nonZeroCount);
+            printf("Frame has %d non-zero values out of 144 (%d%% filled)\n",
+                nonZeroCount, (nonZeroCount * 100) / 144);
+            printf("Frame has %d completely empty rows\n", zeroRowCount);
 
             // If we have a mostly complete frame, we can break
             if (nonZeroCount > 100) {  // Accept if >70% of values are non-zero
@@ -86,16 +94,20 @@ extern "C" {
             }
 
             // Delay between retries, increasing with each attempt
-            std::this_thread::sleep_for(std::chrono::milliseconds(50 * (attempts + 1)));
+            int delay_ms = 50 * (attempts + 1);
+            printf("Waiting %d ms before retry...\n", delay_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
 
-            // Optional: Reset USB endpoints between attempts
+            // Reset USB endpoints between attempts
             if (attempts > 0) {
+                printf("Resetting USB endpoints\n");
                 reset_usb_endpoints();
             }
         }
 
         if (!success) {
             printf("WARNING: Failed to capture a complete frame after %d attempts\n", MAX_ATTEMPTS);
+            printf("Proceeding with partial data - some rows may be missing or interpolated\n");
         }
     }
 

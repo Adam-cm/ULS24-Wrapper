@@ -154,8 +154,10 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     // Initialize tracking for each row
     bool rows_received[12] = { false };
     int total_rows = 0;
-    const int MAX_RETRIES = 3;
+    const int MAX_RETRIES = 5;  // Increased from 3 to 5
     int retry_count = 0;
+    int consecutive_timeouts = 0;
+    const int MAX_CONSECUTIVE_TIMEOUTS = 10;
 
 #ifdef __linux__
     if (DeviceHandle) {
@@ -163,11 +165,18 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         hid_set_nonblocking(DeviceHandle, 0);  // Switch to blocking mode for reliability
         StopHidReadThread();
 
-        // Flush any pending data
+        // Flush any pending data more aggressively
         unsigned char flush_buffer[HIDREPORTNUM];
+        int flush_count = 0;
         while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 5) > 0) {
-            printf("Flushing existing data\n");
+            flush_count++;
         }
+        if (flush_count > 0) {
+            printf("Flushed %d packets of stale data\n", flush_count);
+        }
+
+        // Give device a moment to stabilize after flush
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 #endif
 
@@ -175,13 +184,20 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         // Reset row tracking for this attempt if it's a retry
         if (retry_count > 0) {
             printf("\nAttempt %d of %d to capture missing rows...\n", retry_count + 1, MAX_RETRIES);
-            memset(rows_received, false, sizeof(rows_received));
-            total_rows = 0;
+            printf("Missing rows:");
+            for (int i = 0; i < 12; i++) {
+                if (!rows_received[i]) printf(" %d", i);
+            }
+            printf("\n");
+
+            // Don't reset rows_received array on retries to accumulate rows
+            // across attempts, but reset consecutive timeouts
+            consecutive_timeouts = 0;
         }
 
         // Set channel and issue capture command
         chan_num = chan;
-        printf("Sending capture command\n");
+        printf("Sending capture command for channel %d\n", chan);
         m_TrimReader.Capture12(chan);
         WriteHIDOutputReport();
         std::memset(TxData, 0, sizeof(TxData));
@@ -192,60 +208,127 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         // Main capture loop
         printf("Reading rows...\n");
 
-        const int MAX_READS = 100;  // Safety limit
+        const int MAX_READS = 200;  // Increased from 100
         int reads = 0;
 
         while (Continue_Flag && reads < MAX_READS && total_rows < 12) {
-            // Use timeout-based read for reliability
-            bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 500);  // 500ms timeout
+            // Use timeout-based read for reliability with shorter timeouts but more attempts
+            bool success = ReadHIDInputReportTimeout(HIDREPORTNUM, 250);  // 250ms timeout
 
             if (!success) {
-                printf("No data received within timeout period\n");
+                consecutive_timeouts++;
+                if (consecutive_timeouts > MAX_CONSECUTIVE_TIMEOUTS) {
+                    printf("Too many consecutive timeouts (%d), breaking capture loop\n",
+                        consecutive_timeouts);
+                    break;
+                }
+                printf("No data received (timeout %d/%d)\n",
+                    consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS);
                 continue;
             }
 
-            // Check if we got valid data
+            // Reset timeout counter when we get data
+            consecutive_timeouts = 0;
+
+            // Extract and debug packet information
             uint8_t cmd_type = RxData[2];  // Command type
             uint8_t row_type = RxData[4];  // Row type
             uint8_t row = RxData[5];       // Row number
 
-            // Check for end signal
-            if (row == 0x0b || row == 0xf1) {
-                printf("Received end signal (0x%02x)\n", row);
-                Continue_Flag = false;
-                break;
-            }
+            // Enhanced packet debugging
+            printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd_type, row_type, row);
 
-            // Update channel from response if needed
-            if ((row_type & 0xF0) > 0) {
-                chan_num = ((row_type & 0xF0) >> 4) + 1;
-            }
+            // More comprehensive packet type analysis
+            if (cmd_type == 0x02) {  // Frame data command
+                // Check lower nibble for frame format
+                uint8_t frameFormat = row_type & 0x0F;
 
-            // Process the data
-            ProcessRowData();
+                // More detailed logging of frame types
+                if (frameFormat == 0x02 || frameFormat == 0x22) {
+                    printf("Valid 12x12 frame data packet\n");
 
-            // Track the rows we've received (only if valid row number)
-            if (row < 12) {
-                if (!rows_received[row]) {
-                    rows_received[row] = true;
-                    total_rows++;
-                    printf("Got row %d (%d/12 total)\n", row, total_rows);
+                    // Get channel from the upper nibble of type (if available)
+                    if (row_type & 0xF0) {
+                        chan_num = ((row_type & 0xF0) >> 4) + 1;
+                        printf("Channel detected in packet: %d\n", chan_num);
+                    }
+
+                    // Process the row data
+                    ProcessRowData();
+
+                    // Check for end signal
+                    if (row == 0x0b || row == 0xf1) {
+                        printf("End signal detected: 0x%02x\n", row);
+                        Continue_Flag = false;
+                    }
+                    // Check for valid row number and track it
+                    else if (row < 12) {
+                        if (!rows_received[row]) {
+                            rows_received[row] = true;
+                            total_rows++;
+                            printf("Got row %d (%d/12 total)\n", row, total_rows);
+                        }
+                        else {
+                            printf("Duplicate row %d received\n", row);
+                        }
+                    }
+                    else {
+                        printf("Warning: Invalid row number: %d\n", row);
+                    }
                 }
+                else if (frameFormat == 0x08) {
+                    printf("24x24 frame data packet (not expected for 12x12 capture)\n");
+                    // Process anyway in case it contains useful data
+                    ProcessRowData();
+
+                    if (row < 12) {
+                        if (!rows_received[row]) {
+                            rows_received[row] = true;
+                            total_rows++;
+                            printf("Got row %d from 24x24 frame (%d/12 total)\n", row, total_rows);
+                        }
+                    }
+                }
+                else {
+                    // Try to handle unknown frame types more gracefully
+                    printf("Warning: Unknown frame type: %02x - trying to process anyway\n", frameFormat);
+
+                    // Process the data anyway - it might contain valid row information
+                    ProcessRowData();
+
+                    // Still try to extract row information
+                    if (row < 12) {
+                        if (!rows_received[row]) {
+                            rows_received[row] = true;
+                            total_rows++;
+                            printf("Got row %d from unknown frame (%d/12 total)\n", row, total_rows);
+                        }
+                    }
+                }
+            }
+            else {
+                printf("Non-frame data command: 0x%02x\n", cmd_type);
             }
 
             // Clear RxData for next read
             std::memset(RxData, 0, sizeof(RxData));
             reads++;
+
+            // Break early if we got all rows
+            if (total_rows >= 12) {
+                printf("All rows received, breaking capture loop\n");
+                break;
+            }
         }
 
-        // If we have all rows, break out
-        if (total_rows == 12) {
-            printf("Successfully captured all 12 rows!\n");
-            break;
+        // If we didn't get all rows, try again
+        if (total_rows < 12) {
+            retry_count++;
+            // Small delay between retries with exponential backoff
+            int delay_ms = 50 * (1 << retry_count);  // 50, 100, 200, 400, 800ms
+            printf("Waiting %d ms before retry...\n", delay_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         }
-
-        // Otherwise, prepare for retry
-        retry_count++;
     }
 
 #ifdef __linux__
@@ -266,7 +349,45 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
             if (!rows_received[i]) printf(" %d", i);
         }
         printf("\n");
-        printf("WARNING: Incomplete data captured.\n");
+
+        // Fill missing rows with data from adjacent rows
+        if (total_rows > 0) {
+            printf("Attempting to fill missing rows with interpolated data\n");
+            for (int i = 0; i < 12; i++) {
+                if (!rows_received[i]) {
+                    // Find closest available rows
+                    int prev = i - 1;
+                    while (prev >= 0 && !rows_received[prev]) prev--;
+
+                    int next = i + 1;
+                    while (next < 12 && !rows_received[next]) next++;
+
+                    if (prev >= 0 && next < 12) {
+                        // Interpolate between two rows
+                        for (int j = 0; j < 12; j++) {
+                            float weight = (float)(i - prev) / (next - prev);
+                            frame_data[i][j] = (int)((1 - weight) * frame_data[prev][j] +
+                                weight * frame_data[next][j]);
+                        }
+                        printf("Row %d filled by interpolation\n", i);
+                    }
+                    else if (prev >= 0) {
+                        // Copy from previous
+                        for (int j = 0; j < 12; j++) {
+                            frame_data[i][j] = frame_data[prev][j];
+                        }
+                        printf("Row %d filled from row %d\n", i, prev);
+                    }
+                    else if (next < 12) {
+                        // Copy from next
+                        for (int j = 0; j < 12; j++) {
+                            frame_data[i][j] = frame_data[next][j];
+                        }
+                        printf("Row %d filled from row %d\n", i, next);
+                    }
+                }
+            }
+        }
     }
 
     return (total_rows == 12) ? 0 : 1;  // Return success only if we got all rows
