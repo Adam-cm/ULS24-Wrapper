@@ -161,7 +161,7 @@ void CInterfaceObject::SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Ch
 
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    printf("Starting complete protocol analysis for channel %d\n", chan);
+    printf("Starting optimized capture for channel %d\n", chan);
 
     // Initialize tracking arrays
     bool rows_received[12] = { false };
@@ -178,17 +178,14 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // We need to use a different approach than Windows
-    // Windows approach uses RxData[5] as row number, but Linux needs different handling
-
-    // First send capture command exactly as in original TrimReader.cpp
+    // First send capture command exactly as in original Windows version
     printf("Sending capture command for all rows\n");
 
-    // This follows the exact format from Windows code:
+    // This follows the exact format from Windows code
     TxData[0] = 0xaa;       // preamble code
     TxData[1] = 0x02;       // command
     TxData[2] = 0x0C;       // data length
-    TxData[3] = (chan - 1) << 4 | 0x02;  // data type with channel in high nibble
+    TxData[3] = ((chan - 1) << 4) | 0x02;  // data type with channel in high nibble
     TxData[4] = 0xff;       // real data
     TxData[5] = 0x00;
     TxData[6] = 0x00;
@@ -212,14 +209,14 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     TxData[16] = 0x17;      // back code
     TxData[17] = 0x17;      // back code
 
-    // Now send this properly formatted command
     WriteHIDOutputReport();
     std::memset(TxData, 0, sizeof(TxData));
 
-    // First pass: Read what we can get
-    printf("Reading primary rows\n");
+    // First pass: Get as many rows as we can
+    printf("Reading rows with ID-based mapping\n");
+    Continue_Flag = true;
 
-    // Allow enough time for all rows
+    // Process all available rows
     for (int read_attempt = 0; read_attempt < 30 && total_rows < 12; read_attempt++) {
         unsigned char buffer[HIDREPORTNUM];
         int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
@@ -227,112 +224,40 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         if (res > 0) {
             std::memcpy(RxData, &buffer[1], RxNum);
 
-            // Windows uses RxData[5] as row, but we need to be more careful
+            // Get row ID from packet
             uint8_t row_id = RxData[4];
-            uint8_t row;
+            uint8_t mapped_row;
 
-            // Map the row ID based on our learned protocol
-            if (row_id == 0) row = 0;
-            else if (row_id == 1) row = 1;
-            else if (row_id == 2) row = 4;   // This is the key insight - row 2 is actually row 4
-            else if (row_id == 3) row = 3;
-            else if (row_id == 4) row = 8;   // Row 4 is actually row 8
-            else if (row_id == 5) row = 5;
-            else if (row_id == 6) row = 6;
-            else if (row_id == 7) row = 7;
-            else if (row_id == 8) row = 2;   // Row 8 is actually row 2
-            else if (row_id == 9) row = 9;
-            else if (row_id == 10) row = 10;
-            else if (row_id == 11) row = 11;
-            else row = row_id; // Default
+            // Map row IDs to actual row numbers based on known protocol
+            switch (row_id) {
+            case 0: mapped_row = 0; break;
+            case 1: mapped_row = 1; break;
+            case 2: mapped_row = 4; break; // Key mapping
+            case 3: mapped_row = 3; break;
+            case 4: mapped_row = 8; break; // Key mapping
+            case 5: mapped_row = 5; break;
+            case 6: mapped_row = 6; break;
+            case 7: mapped_row = 7; break;
+            case 8: mapped_row = 2; break; // Key mapping
+            case 9: mapped_row = 9; break;
+            case 10: mapped_row = 10; break;
+            case 11: mapped_row = 11; break;
+            default: mapped_row = row_id;
+            }
 
-            if (row < 12 && !rows_received[row]) {
+            if (mapped_row < 12 && !rows_received[mapped_row]) {
+                // CRITICAL: Always use ProcessRowData to correctly handle the data
                 ProcessRowData();
-                rows_received[row] = true;
+                rows_received[mapped_row] = true;
                 total_rows++;
-                printf("Received row %d (mapped from ID %d) - %d/12 total\n",
-                    row, row_id, total_rows);
+                printf("Got row %d (mapped from ID %d) - %d/12 total\n",
+                    mapped_row, row_id, total_rows);
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         else {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-
-    // Check which rows we've received
-    printf("Primary pass complete - received %d/12 rows\n", total_rows);
-    if (total_rows < 12) {
-        printf("Missing rows:");
-        for (int i = 0; i < 12; i++) {
-            if (!rows_received[i]) printf(" %d", i);
-        }
-        printf("\n");
-
-        // Try one more focused pass for missing rows
-        printf("Attempting focused capture for missing rows\n");
-
-        for (int miss_attempt = 0; miss_attempt < 5 && total_rows < 12; miss_attempt++) {
-            // Send focused capture command targeting missing rows
-            TxData[0] = 0xaa;       // preamble code
-            TxData[1] = 0x02;       // command
-            TxData[2] = 0x0C;       // data length
-            TxData[3] = ((chan - 1) << 4) | 0x03;  // different command type (0x03)
-            TxData[4] = 0xff;
-            TxData[5] = 0x00;
-
-            // Fill in remaining data
-            for (int i = 6; i < 15; i++) {
-                TxData[i] = 0x00;
-            }
-
-            // Calculate checksum
-            TxData[15] = 0;
-            for (int i = 1; i < 15; i++) {
-                TxData[15] += TxData[i];
-            }
-
-            if (TxData[15] == 0x17)
-                TxData[15] = 0x18;
-
-            TxData[16] = 0x17;      // back code
-            TxData[17] = 0x17;      // back code
-
-            WriteHIDOutputReport();
-            std::memset(TxData, 0, sizeof(TxData));
-
-            // Read results
-            for (int i = 0; i < 15; i++) {
-                unsigned char buffer[HIDREPORTNUM];
-                int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
-
-                if (res > 0) {
-                    std::memcpy(RxData, &buffer[1], RxNum);
-
-                    // Try both direct and mapped row numbers
-                    uint8_t direct_row = RxData[5]; // Try direct read (Windows method)
-                    uint8_t mapped_row;
-
-                    // Map from protocol ID to actual row
-                    uint8_t row_id = RxData[4];
-                    if (row_id == 2) mapped_row = 4;
-                    else if (row_id == 4) mapped_row = 8;
-                    else if (row_id == 8) mapped_row = 2;
-                    else mapped_row = row_id;
-
-                    // Try both methods
-                    for (uint8_t test_row : {direct_row, mapped_row}) {
-                        if (test_row < 12 && !rows_received[test_row]) {
-                            ProcessRowData();
-                            rows_received[test_row] = true;
-                            total_rows++;
-                            printf("Got missing row %d (%d/12 rows)\n", test_row, total_rows);
-                            break;
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -345,10 +270,9 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Final report
-    printf("Complete capture - received %d/12 rows\n", total_rows);
+    // Final report and interpolation for missing rows
+    printf("Capture complete - received %d/12 rows\n", total_rows);
 
-    // Fill in any missing rows with interpolation
     if (total_rows < 12) {
         printf("Missing rows:");
         for (int i = 0; i < 12; i++) {
