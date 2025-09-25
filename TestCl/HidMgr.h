@@ -10,8 +10,8 @@
 #define TxNum 64
 
 // Device identifiers
-#define VENDOR_ID 0x04d8
-#define PRODUCT_ID 0x003f
+#define VENDOR_ID 0x0483
+#define PRODUCT_ID 0x5750
 
 // Buffer size for circular queue
 #define CIRCULAR_BUFFER_SIZE 256
