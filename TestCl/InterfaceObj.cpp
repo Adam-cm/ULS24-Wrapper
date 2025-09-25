@@ -239,59 +239,28 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
         }
     }
 
-    // Try a series of different command types and patterns for rows 4 and 8
-    for (int attempt = 0; attempt < 5 && total_rows < 12; attempt++) {
-        uint8_t cmd_type = 0;
-        uint8_t chan_value = chan;
+    // Third pass: Get row 4 with command type 0x28
+    if (!rows_received[4]) {
+        printf("Pass 3: Getting row 4 with command 0x28\n");
 
-        switch (attempt) {
-        case 0:
-            cmd_type = 0x28;  // Try command type 0x28
-            chan_value = chan;
-            printf("Pass 3.1: Testing command 0x28\n");
-            break;
-        case 1:
-            cmd_type = 0x26;  // Original command with different bit pattern
-            chan_value = chan | 0x40;  // Set bit 6
-            printf("Pass 3.2: Testing command 0x26 with bit 6 set\n");
-            break;
-        case 2:
-            cmd_type = 0x26;  // Original command with combined bit pattern
-            chan_value = chan | 0xC0;  // Set bits 6 and 7
-            printf("Pass 3.3: Testing command 0x26 with bits 6+7 set\n");
-            break;
-        case 3:
-            cmd_type = 0x25;  // Try command type 0x25
-            chan_value = chan;
-            printf("Pass 3.4: Testing command 0x25\n");
-            break;
-        case 4:
-            cmd_type = 0x24;  // Try command type 0x24
-            chan_value = chan;
-            printf("Pass 3.5: Testing command 0x24\n");
-            break;
-        }
-
-        // Send custom command
-        TxData[0] = 0xaa;     // preamble code
-        TxData[1] = 0x01;     // command
-        TxData[2] = 0x03;     // data length
-        TxData[3] = cmd_type; // command type
-        TxData[4] = chan_value;
+        // Send command with type 0x28
+        TxData[0] = 0xaa;    // preamble code
+        TxData[1] = 0x01;    // command
+        TxData[2] = 0x03;    // data length
+        TxData[3] = 0x28;    // command type
+        TxData[4] = chan;    // channel
         TxData[5] = 0x00;
 
         // Calculate checksum
         TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];
         if (TxData[6] == 0x17) TxData[6] = 0x18;
 
-        TxData[7] = 0x17;     // back code
-        TxData[8] = 0x17;     // back code
+        TxData[7] = 0x17;    // back code
+        TxData[8] = 0x17;    // back code
 
         WriteHIDOutputReport();
         std::memset(TxData, 0, sizeof(TxData));
 
-        // Capture raw packets to see what we're getting
-        printf("Capturing with command type 0x%02x, chan 0x%02x\n", cmd_type, chan_value);
         for (int i = 0; i < 10; i++) {
             unsigned char buffer[HIDREPORTNUM];
             int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
@@ -300,60 +269,75 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                 std::memcpy(RxData, &buffer[1], RxNum);
                 uint8_t row = RxData[4];
 
-                // Print raw packet info
-                printf("Raw packet: CMD=0x%02x ROW=%d\n", RxData[3], row);
-
-                // For rows 4 and 8, we need to interpret the row index
-                // based on observations
-                if (!rows_received[4] && (row == 2 || row == 4)) {
-                    printf("Interpreting as row 4\n");
+                if (row == 2) {  // Row 4 is reported as row 2 with command 0x28
                     row = 4;
-                }
-                else if (!rows_received[8] && (row == 4 || row == 8)) {
-                    printf("Interpreting as row 8\n");
-                    row = 8;
-                }
-
-                if (row < 12 && !rows_received[row]) {
                     ProcessRowData();
                     rows_received[row] = true;
                     total_rows++;
-                    printf("Got row %d with command 0x%02x (%d/12 rows)\n",
-                        row, cmd_type, total_rows);
+                    printf("Got row 4 with command 0x28 (%d/12 rows)\n", total_rows);
+                    break;
                 }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
     }
 
-    // As a last resort, try for rows 4 and 8 with explicit row request
-    if (!rows_received[4] || !rows_received[8]) {
-        printf("Final attempt: Explicit row requests\n");
+    // Specifically targeting row 8 with specialized approach
+    if (!rows_received[8]) {
+        printf("Pass 4: Special approach for row 8\n");
 
-        for (int missing_row : {4, 8}) {
-            if (rows_received[missing_row]) continue;
+        // Try multiple approaches for row 8
+        for (int attempt = 0; attempt < 5 && !rows_received[8]; attempt++) {
+            uint8_t cmd_type = 0;
+            uint8_t cmd_param = 0;
 
-            // Direct row request command
-            TxData[0] = 0xaa;     // preamble code
-            TxData[1] = 0x01;     // command
-            TxData[2] = 0x03;     // data length
-            TxData[3] = 0x31;     // row request command (0x31)
-            TxData[4] = missing_row;
-            TxData[5] = chan;
+            switch (attempt) {
+            case 0:  // Try command 0x29 (following pattern from 0x28 for row 4)
+                cmd_type = 0x29;
+                cmd_param = chan;
+                printf("Pass 4.1: Testing command 0x29\n");
+                break;
+            case 1:  // Try command 0x28 with parameter 4 (direct row)
+                cmd_type = 0x28;
+                cmd_param = 4;  // Targeting row 8 by sending 4
+                printf("Pass 4.2: Testing command 0x28 with param 4\n");
+                break;
+            case 2:  // Try command 0x26 with specific value in both bytes
+                cmd_type = 0x26;
+                cmd_param = 0x48;  // 0x48 = 'H' = ASCII for '8' - 24
+                printf("Pass 4.3: Testing command 0x26 with param 0x48\n");
+                break;
+            case 3:  // Try row-specific command
+                cmd_type = 0x22;  // Try a different command type
+                cmd_param = 8;    // Directly specify row 8
+                printf("Pass 4.4: Testing command 0x22 with direct row 8\n");
+                break;
+            case 4:  // Try row-specific command with offset
+                cmd_type = 0x22;
+                cmd_param = 4;  // Specifying row 4 might get us row 8
+                printf("Pass 4.5: Testing command 0x22 with offset row 4\n");
+                break;
+            }
+
+            // Send the command
+            TxData[0] = 0xaa;       // preamble code
+            TxData[1] = 0x01;       // command
+            TxData[2] = 0x03;       // data length
+            TxData[3] = cmd_type;   // command type
+            TxData[4] = cmd_param;  // parameter
+            TxData[5] = chan;       // channel (in different position)
 
             // Calculate checksum
             TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];
             if (TxData[6] == 0x17) TxData[6] = 0x18;
 
-            TxData[7] = 0x17;     // back code
-            TxData[8] = 0x17;     // back code
+            TxData[7] = 0x17;       // back code
+            TxData[8] = 0x17;       // back code
 
             WriteHIDOutputReport();
             std::memset(TxData, 0, sizeof(TxData));
 
-            printf("Explicitly requesting row %d\n", missing_row);
-            for (int i = 0; i < 5; i++) {
+            printf("Trying to get row 8 with command 0x%02x param 0x%02x\n", cmd_type, cmd_param);
+            for (int i = 0; i < 10; i++) {
                 unsigned char buffer[HIDREPORTNUM];
                 int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
 
@@ -361,14 +345,33 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                     std::memcpy(RxData, &buffer[1], RxNum);
                     uint8_t row = RxData[4];
 
-                    if (row == missing_row ||
-                        (missing_row == 4 && row == 2) ||
-                        (missing_row == 8 && row == 4)) {
-                        printf("Got explicit row %d\n", missing_row);
-                        row = missing_row;
+                    printf("Got row %d with cmd 0x%02x\n", row, cmd_type);
+
+                    // Various interpretations for row 8
+                    if (row == 4) {  // Row 8 might be reported as row 4
+                        row = 8;
                         ProcessRowData();
                         rows_received[row] = true;
                         total_rows++;
+                        printf("Got row 8 (reported as 4) with command 0x%02x (%d/12 rows)\n",
+                            cmd_type, total_rows);
+                        break;
+                    }
+                    else if (row == 8) {  // Direct match
+                        ProcessRowData();
+                        rows_received[row] = true;
+                        total_rows++;
+                        printf("Got row 8 directly with command 0x%02x (%d/12 rows)\n",
+                            cmd_type, total_rows);
+                        break;
+                    }
+                    else if (row == 0 && attempt > 2) {  // Row 8 might be reported as row 0
+                        row = 8;
+                        ProcessRowData();
+                        rows_received[row] = true;
+                        total_rows++;
+                        printf("Got row 8 (reported as 0) with command 0x%02x (%d/12 rows)\n",
+                            cmd_type, total_rows);
                         break;
                     }
                 }
