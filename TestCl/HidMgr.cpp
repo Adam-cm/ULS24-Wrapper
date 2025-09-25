@@ -16,6 +16,10 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <linux/hidraw.h>
 #endif
 
 #include "HidMgr.h"
@@ -162,18 +166,38 @@ bool FindTheHID()
     if (DeviceHandle) {
         std::printf("Device found!\n");
 
-        // Try to increase the internal buffer size on Linux
 #ifdef __linux__
-        // Use ioctl to increase buffer size if possible
-        int fd = hid_get_fd(DeviceHandle);
-        if (fd >= 0) {
-            // Try to set buffer size to 16KB (typical default is 4KB)
-            int buf_size = 16384;
-            if (ioctl(fd, HIDIOCSBUFSIZE, &buf_size) < 0) {
-                std::printf("Failed to increase HID buffer size via ioctl\n");
-            }
-            else {
-                std::printf("Increased HID buffer size to %d bytes\n", buf_size);
+        // HIDAPI doesn't expose hid_get_fd publicly, so we need to find the device manually
+        std::string hidraw_path;
+        struct hid_device_info* devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
+        if (devs) {
+            // The path will be something like /dev/hidraw0
+            hidraw_path = devs->path;
+            hid_free_enumeration(devs);
+
+            // Extract just the device name from the path
+            size_t pos = hidraw_path.rfind('/');
+            if (pos != std::string::npos) {
+                hidraw_path = "/dev/" + hidraw_path.substr(pos + 1);
+                printf("Found HID device at: %s\n", hidraw_path.c_str());
+
+                // Open the device directly for ioctl
+                int fd = open(hidraw_path.c_str(), O_RDWR);
+                if (fd >= 0) {
+                    // Try to set buffer size to 16KB
+                    int buf_size = 16384;
+                    if (ioctl(fd, HIDIOCSREPORT, &buf_size) < 0) {
+                        printf("Failed to increase HID buffer size: %s\n", strerror(errno));
+                    }
+                    else {
+                        printf("Increased HID buffer size to %d bytes\n", buf_size);
+                    }
+                    close(fd);
+                }
+                else {
+                    printf("Could not open %s for ioctl: %s\n",
+                        hidraw_path.c_str(), strerror(errno));
+                }
             }
         }
 #endif
