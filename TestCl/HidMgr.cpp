@@ -158,10 +158,30 @@ bool FindTheHID()
     }
 
     DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
-    hid_set_nonblocking(DeviceHandle, 0); // 0 = blocking mode
+
     if (DeviceHandle) {
         std::printf("Device found!\n");
-        hid_set_nonblocking(DeviceHandle, 1); // 1 = non-blocking
+
+        // Try to increase the internal buffer size on Linux
+#ifdef __linux__
+        // Use ioctl to increase buffer size if possible
+        int fd = hid_get_fd(DeviceHandle);
+        if (fd >= 0) {
+            // Try to set buffer size to 16KB (typical default is 4KB)
+            int buf_size = 16384;
+            if (ioctl(fd, HIDIOCSBUFSIZE, &buf_size) < 0) {
+                std::printf("Failed to increase HID buffer size via ioctl\n");
+            }
+            else {
+                std::printf("Increased HID buffer size to %d bytes\n", buf_size);
+            }
+        }
+#endif
+
+        // Set non-blocking mode
+        hid_set_nonblocking(DeviceHandle, 1);
+
+        // Start the read thread
         StartHidReadThread();
         return true;
     }

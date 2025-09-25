@@ -107,16 +107,35 @@ extern "C" {
 
     EXPORT void optimize_for_pi() {
 #ifdef __linux__
-        // Pi 5 specific USB tuning
+        // Increase USB/HID buffer sizes for Raspberry Pi
         if (geteuid() == 0) {
-            // Adjust USB polling interval
-            system("echo 1 > /sys/module/usbcore/parameters/usbfs_memory_mb");
+            // 1. Increase kernel USB buffer size
+            system("echo 128 > /sys/module/usbcore/parameters/usbfs_memory_mb 2>/dev/null || true");
 
-            // Set USB controller to high-performance mode
-            system("echo 0 > /sys/bus/usb/devices/*/power/autosuspend 2>/dev/null || true");
+            // 2. Increase USB transfer timeout
+            system("echo 5000 > /sys/module/usbcore/parameters/usb_storage_timeout 2>/dev/null || true");
 
-            // Disable USB power management
-            system("echo on > /sys/bus/usb/devices/*/power/control 2>/dev/null || true");
+            // 3. Add udev rule to increase buffer size
+            FILE* f = fopen("/etc/udev/rules.d/99-hidapi-buffer.rules", "w");
+            if (f) {
+                fprintf(f, "# Increase buffer size for HID devices\n");
+                fprintf(f, "SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"0483\", ATTRS{idProduct}==\"5750\", ATTR{buffer_size}=\"16384\"\n");
+                fprintf(f, "SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"0483\", ATTRS{idProduct}==\"5750\", ATTR{bInterval}=\"1\"\n");
+                fclose(f);
+                system("udevadm control --reload-rules");
+                system("udevadm trigger");
+            }
+
+            // 4. Disable USB autosuspend for our device
+            system("for dev in /sys/bus/usb/devices/*/idVendor; do "
+                "  if [ -f $dev ] && [ \"$(cat $dev)\" = \"0483\" ]; then "
+                "    echo on > $(dirname $dev)/power/control 2>/dev/null || true; "
+                "    echo -1 > $(dirname $dev)/power/autosuspend_delay_ms 2>/dev/null || true; "
+                "  fi "
+                "done");
+
+            // 5. Set maximum performance CPU governor
+            system("echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1 || true");
         }
 #endif
     }
