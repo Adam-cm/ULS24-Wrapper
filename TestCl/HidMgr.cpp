@@ -323,15 +323,14 @@ void ReadHIDInputReport() {
     // ...
 #else
     // Linux/non-Windows implementation - use hidapi directly
-    // Increase buffer size to HIDREPORTNUM (65 bytes)
     unsigned char buffer[HIDREPORTNUM] = { 0 };
     int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 1000);
 
     if (res > 0) {
-        // Copy data from buffer to RxData (skipping report ID) with proper bounds checking
+        // Copy data from buffer to RxData (skipping report ID)
         std::memcpy(RxData, &buffer[1], std::min(static_cast<size_t>(RxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
 
-        // Process the data as needed
+        // Extract command type and other info
         uint8_t cmd = RxData[2];  // Command type 
         uint8_t type = RxData[4]; // Row type
         uint8_t row = RxData[5];  // Row number
@@ -340,12 +339,10 @@ void ReadHIDInputReport() {
 
         // Process based on command type
         if (cmd == 0x02) {  // Frame data command
-            // Extract frame format from lower nibble
             uint8_t frameFormat = type & 0x0F;
 
-            // Handle 12x12 frame formats (both 0x02 and 0x22)
             if (frameFormat == 0x02 || frameFormat == 0x22) {
-                // Get channel from the upper nibble of type if present
+                // Get channel from the upper nibble of type
                 if (type & 0xF0) {
                     chan_num = ((type & 0xF0) >> 4) + 1;
                 }
@@ -362,34 +359,41 @@ void ReadHIDInputReport() {
             else if (frameFormat == 0x08) {  // 24x24 frame
                 if (row == 0x17) {
                     Continue_Flag = false;
-                    printf("24x24 frame end signal detected\n");
                 }
                 else {
                     Continue_Flag = true;
                 }
             }
             else {
-                // Try to handle unknown frame types
-                printf("Warning: Unknown frame type: %02x\n", frameFormat);
+                printf("Warning: Unknown frame format: %02x\n", frameFormat);
+                Continue_Flag = true;  // Continue by default
+            }
+        }
+        else if (cmd == 0x1c) {  // Special frame data command used by the device
+            // For 0x1c command, the row_type is the row index (0-11)
+            int rowIndex = type & 0x0F;
 
-                // For unknown frames, still try to extract row information
-                if (row < 12) {
-                    printf("Treating as valid row %d data\n", row);
-                    Continue_Flag = true;
-                }
-                else if (row == 0x0b || row == 0xf1) {
-                    printf("End signal in unknown frame type: 0x%02x\n", row);
-                    Continue_Flag = false;
-                }
-                else {
-                    // Default to continuing
-                    Continue_Flag = true;
-                }
+            if (rowIndex < 12) {
+                printf("Processing 0x1c command data for row %d\n", rowIndex);
+                Continue_Flag = true;  // Continue receiving data
+            }
+            else {
+                printf("Warning: Invalid row index in 0x1c command: %d\n", rowIndex);
+                Continue_Flag = true;  // Continue by default
+            }
+
+            // If we received the last row, consider this the end
+            if (rowIndex == 11) {
+                // Don't set Continue_Flag=false here to allow processing
+                // Let the processing code handle it
             }
         }
         else if (cmd == 0x01) {
             // Command acknowledgement
             printf("Command acknowledgement received\n");
+        }
+        else {
+            printf("Unknown command type: 0x%02x\n", cmd);
         }
     }
     else if (res < 0) {
@@ -397,10 +401,6 @@ void ReadHIDInputReport() {
         CloseHandles();
         g_DeviceDetected = false;
         MyDeviceDetected = false;
-    }
-    else {
-        // No data available (timeout)
-        // Don't print anything to avoid console spam
     }
 #endif
 }

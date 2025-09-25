@@ -40,6 +40,9 @@ public:
     void ResetTrim();
     void ReadTrimData(); // From flash
 
+    // Add this to the public section of the CInterfaceObject class
+    void CaptureEvenRows(uint8_t chan);
+
     int IsDeviceDetected(); // 0: Device not detected; 1: device detected
     std::string GetChipName(); // Get the name of the chip embedded in trim.dat file
 };
