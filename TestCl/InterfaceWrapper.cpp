@@ -26,6 +26,9 @@ extern uint8_t RxData[RxNum];
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
+// Forward declaration of the internal check_data_flow function
+extern int check_data_flow();
+
 // C++ linkage function - KEEP THIS OUTSIDE extern "C" block
 int reset_usb_endpoints() {
 #ifdef __linux__
@@ -98,8 +101,9 @@ extern "C" {
         return static_cast<int>(GetBufferSize());
     }
 
-    // Export the check_data_flow function that's defined in HidMgr.cpp
+    // Export the check_data_flow function correctly
     EXPORT int check_data_flow() {
+        // Call the function directly - no scope qualifier needed
         return ::check_data_flow();
     }
 
@@ -107,7 +111,7 @@ extern "C" {
         if (length >= 3) {
             stats[0] = CIRCULAR_BUFFER_SIZE;
             stats[1] = static_cast<int>(GetBufferSize());
-            stats[2] = check_data_flow();
+            stats[2] = ::check_data_flow();  // Use scope qualifier here too
             return 3;
         }
         return 0;
