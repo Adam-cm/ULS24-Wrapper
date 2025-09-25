@@ -172,35 +172,118 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     bool rows_received[12] = { false };
     int total_rows = 0;
 
-    // Switch to direct protocol handling for Linux
 #ifdef __linux__
     if (DeviceHandle) {
         printf("Taking exclusive USB control with protocol analysis\n");
         hid_set_nonblocking(DeviceHandle, 0);
         StopHidReadThread();
 
-        // Drain any pending data
         unsigned char flush_buffer[HIDREPORTNUM];
         while (hid_read_timeout(DeviceHandle, flush_buffer, HIDREPORTNUM, 5) > 0);
     }
 #endif
 
-    // First approach: capture with alternating commands
-    for (int attempt = 0; attempt < 3 && total_rows < 12; attempt++) {
-        printf("Capture attempt %d with protocol analysis\n", attempt + 1);
+    // First pass: standard command (gets odd-indexed rows)
+    m_TrimReader.Capture12(chan);
+    WriteHIDOutputReport();
+    std::memset(TxData, 0, sizeof(TxData));
 
-        // Send first capture command (typically gets odd-indexed rows)
+    printf("Pass 1: Reading odd-indexed rows\n");
+    for (int i = 0; i < 12; i++) {
+        unsigned char buffer[HIDREPORTNUM];
+        int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+
+        if (res > 0) {
+            std::memcpy(RxData, &buffer[1], RxNum);
+            uint8_t row = RxData[4];
+
+            if (row < 12 && !rows_received[row]) {
+                ProcessRowData();
+                rows_received[row] = true;
+                total_rows++;
+                printf("Got row %d (%d/12 rows)\n", row, total_rows);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+
+    // Second pass: Get rows 2, 6, 10 with first bit pattern
+    if (total_rows < 12) {
+        printf("Pass 2: Reading rows 2, 6, 10 with command variant 1\n");
         m_TrimReader.Capture12(chan);
+        TxData[4] |= 0x80;  // Set bit 7
         WriteHIDOutputReport();
         std::memset(TxData, 0, sizeof(TxData));
 
-        // Read first batch of rows
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 10; i++) {
             unsigned char buffer[HIDREPORTNUM];
             int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
 
             if (res > 0) {
-                // Process data
+                std::memcpy(RxData, &buffer[1], RxNum);
+                uint8_t row = RxData[4];
+
+                // If row is 1, 3, or 5 - interpret as 2, 6, or 10
+                if (row == 1 && !rows_received[2]) { row = 2; }
+                else if (row == 3 && !rows_received[6]) { row = 6; }
+                else if (row == 5 && !rows_received[10]) { row = 10; }
+
+                if (row < 12 && !rows_received[row]) {
+                    ProcessRowData();
+                    rows_received[row] = true;
+                    total_rows++;
+                    printf("Got row %d with command variant 1 (%d/12 rows)\n", row, total_rows);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
+
+    // Third pass: Get rows 4, 8 with second bit pattern
+    if (total_rows < 12) {
+        printf("Pass 3: Reading rows 4, 8 with command variant 2\n");
+        m_TrimReader.Capture12(chan);
+        TxData[4] |= 0x40;  // Try bit 6 instead
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
+
+        for (int i = 0; i < 10; i++) {
+            unsigned char buffer[HIDREPORTNUM];
+            int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+
+            if (res > 0) {
+                std::memcpy(RxData, &buffer[1], RxNum);
+                uint8_t row = RxData[4];
+                printf("Raw row: %d\n", row);
+
+                // If row is 2 or 4 - interpret as 4 or 8
+                if (row == 2 && !rows_received[4]) { row = 4; }
+                else if (row == 4 && !rows_received[8]) { row = 8; }
+
+                if (row < 12 && !rows_received[row]) {
+                    ProcessRowData();
+                    rows_received[row] = true;
+                    total_rows++;
+                    printf("Got row %d with command variant 2 (%d/12 rows)\n", row, total_rows);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
+
+    // Fourth pass: Try a combination pattern for any remaining rows
+    if (total_rows < 12) {
+        printf("Pass 4: Final attempt for remaining rows\n");
+        m_TrimReader.Capture12(chan);
+        TxData[4] |= 0xC0;  // Try both bits 6 and 7
+        WriteHIDOutputReport();
+        std::memset(TxData, 0, sizeof(TxData));
+
+        for (int i = 0; i < 10; i++) {
+            unsigned char buffer[HIDREPORTNUM];
+            int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
+
+            if (res > 0) {
                 std::memcpy(RxData, &buffer[1], RxNum);
                 uint8_t row = RxData[4];
 
@@ -208,77 +291,9 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
                     ProcessRowData();
                     rows_received[row] = true;
                     total_rows++;
-                    printf("Got row %d (%d/12 rows)\n", row, total_rows);
+                    printf("Got row %d with command variant 3 (%d/12 rows)\n", row, total_rows);
                 }
-
-                // Critical delay between reads
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-        }
-
-        // Check the command packet format for even rows
-        if (total_rows < 12) {
-            printf("Trying special command variant for even rows\n");
-
-            // Modified capture command - adjust header to target even rows
-            m_TrimReader.Capture12(chan);
-
-            // CRITICAL MODIFICATION: Adjust command bytes to target even rows
-            TxData[4] |= 0x80;  // Set high bit in control byte - may need adjustment
-
-            WriteHIDOutputReport();
-            std::memset(TxData, 0, sizeof(TxData));
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-            // Read second batch targeting even rows
-            for (int i = 0; i < 12; i++) {
-                unsigned char buffer[HIDREPORTNUM];
-                int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 100);
-
-                if (res > 0) {
-                    // Process the raw buffer differently
-                    printf("Raw packet: [%02x %02x %02x %02x %02x ...]\n",
-                        buffer[0], buffer[1], buffer[2], buffer[3], buffer[4]);
-
-                    // Try alternate parsing approach for even rows
-                    std::memcpy(RxData, &buffer[1], RxNum);
-                    uint8_t std_row = RxData[4];
-
-                    // Look for an even row index or try to derive it
-                    uint8_t row = std_row;
-                    if (std_row < 6) {
-                        // Try to interpret as even row
-                        row = std_row * 2;
-                    }
-
-                    if (row < 12 && row % 2 == 0 && !rows_received[row]) {
-                        // Try standard processing first
-                        ProcessRowData();
-                        rows_received[row] = true;
-                        total_rows++;
-                        printf("Got even row %d using protocol variant (%d/12 rows)\n",
-                            row, total_rows);
-                    }
-
-                    // Critical delay between reads
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-            }
-        }
-
-        // Check if we should try one more approach
-        if (total_rows < 12 && attempt == 1) {
-            // Try a USB reset between attempts
-            printf("Attempting USB endpoint reset\n");
-            hid_close(DeviceHandle);
-            DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
-            if (DeviceHandle) {
-                hid_set_nonblocking(DeviceHandle, 0);
-                printf("Device reopened after reset\n");
-
-                // Additional delay after reset
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
         }
     }
@@ -292,8 +307,18 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
 #endif
 
-    // Provide detailed report on what rows we got
+    // Final report
     printf("USB protocol analysis complete - received %d/12 rows\n", total_rows);
+    if (total_rows < 12) {
+        printf("Missing rows:");
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) printf(" %d", i);
+        }
+        printf("\n");
+    }
+    else {
+        printf("SUCCESS! All 12 rows received\n");
+    }
 
     Continue_Flag = false;
     return (total_rows > 0) ? 0 : 1;
