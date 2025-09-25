@@ -62,3 +62,6 @@ void StopHidReadThread();
 size_t GetBufferSize();
 bool GetNextHidReport(std::vector<uint8_t>& report);
 int check_data_flow();
+
+// Add this function declaration
+void PrintHexData(const char* prefix, const uint8_t* data, int length);
