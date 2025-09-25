@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <string>
 
 // Platform-specific includes for libusb
 #ifdef _WIN32
@@ -38,10 +39,15 @@ public:
     void StartAsyncRead();
     void StopAsyncRead();
 
-    // Alternative access methods for troubleshooting
+    // Alternative access methods
+    bool TryAlternativeMethods();
     bool TryAlternativeAccess();
+    #ifdef __linux__
+    bool TryRawAccess();
+    #endif
 
     // Diagnostic functions
+    void ListAllUSBDevices();
     void SetVerboseLogging(bool enable) { m_VerboseLogging = enable; }
     bool CheckLibusbAvailability();
     void DumpDeviceInfo();
@@ -52,6 +58,10 @@ private:
     // libusb structures
     libusb_context* m_Context = nullptr;
     libusb_device_handle* m_DeviceHandle = nullptr;
+    
+    // Raw device access (Linux)
+    int m_RawDevice = -1;
+    std::string m_RawDevicePath;
     
     // Interface and endpoint information
     int m_Interface = 0;

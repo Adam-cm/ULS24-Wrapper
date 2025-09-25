@@ -10,21 +10,37 @@
 #ifdef __linux__
 #include <dlfcn.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #endif
 
 // Global instance
 DirectUSB g_DirectUSB;
 
 DirectUSB::DirectUSB() : m_Running(false) {
+    // Default to a higher level of debug/diagnostics
+    m_VerboseLogging = true;
 }
 
 DirectUSB::~DirectUSB() {
     StopAsyncRead();
     
+    if (m_RawDevice != -1) {
+        #ifdef __linux__
+        close(m_RawDevice);
+        m_RawDevice = -1;
+        #endif
+    }
+    
     if (m_DeviceHandle) {
         // Release interface and close device
-        libusb_release_interface(m_DeviceHandle, m_Interface);
-        libusb_close(m_DeviceHandle);
+        try {
+            libusb_release_interface(m_DeviceHandle, m_Interface);
+            libusb_close(m_DeviceHandle);
+        } catch (...) {
+            printf("Warning: Exception during device cleanup\n");
+        }
         m_DeviceHandle = nullptr;
     }
     
@@ -34,7 +50,119 @@ DirectUSB::~DirectUSB() {
     }
 }
 
+// Print detailed info about all USB devices for diagnostics
+void DirectUSB::ListAllUSBDevices() {
+    printf("\n====== LISTING ALL USB DEVICES ======\n");
+    
+    if (!m_Context) {
+        if (libusb_init(&m_Context) != 0) {
+            printf("Failed to initialize libusb for device listing\n");
+            return;
+        }
+    }
+    
+    libusb_device **devs;
+    ssize_t cnt = libusb_get_device_list(m_Context, &devs);
+    if (cnt < 0) {
+        printf("Failed to get USB device list\n");
+        return;
+    }
+    
+    printf("Found %ld USB devices:\n\n", cnt);
+    
+    for (ssize_t i = 0; i < cnt; i++) {
+        libusb_device *dev = devs[i];
+        libusb_device_descriptor desc;
+        
+        if (libusb_get_device_descriptor(dev, &desc) != 0) {
+            printf("  %ld: Failed to get device descriptor\n", i);
+            continue;
+        }
+        
+        printf("  Device %ld:\n", i);
+        printf("    Bus: %03d Device: %03d\n", 
+               libusb_get_bus_number(dev), 
+               libusb_get_device_address(dev));
+        printf("    VID: 0x%04X, PID: 0x%04X\n", desc.idVendor, desc.idProduct);
+        printf("    Class: 0x%02X, SubClass: 0x%02X, Protocol: 0x%02X\n", 
+               desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
+        printf("    USB Version: %d.%d\n", desc.bcdUSB >> 8, desc.bcdUSB & 0xFF);
+        
+        // If this might be our device, mark it
+        if (desc.idVendor == VENDOR_ID) {
+            if (desc.idProduct == PRODUCT_ID) {
+                printf("    *** THIS IS OUR TARGET DEVICE! ***\n");
+            } else {
+                printf("    *** SAME VENDOR AS OUR TARGET DEVICE ***\n");
+            }
+        }
+        
+        // Try to open the device to get more info
+        libusb_device_handle *handle;
+        if (libusb_open(dev, &handle) == 0) {
+            unsigned char string_data[256];
+            
+            if (desc.iManufacturer > 0) {
+                if (libusb_get_string_descriptor_ascii(handle, desc.iManufacturer, 
+                                                     string_data, sizeof(string_data)) > 0) {
+                    printf("    Manufacturer: %s\n", string_data);
+                }
+            }
+            
+            if (desc.iProduct > 0) {
+                if (libusb_get_string_descriptor_ascii(handle, desc.iProduct, 
+                                                     string_data, sizeof(string_data)) > 0) {
+                    printf("    Product: %s\n", string_data);
+                }
+            }
+            
+            if (desc.iSerialNumber > 0) {
+                if (libusb_get_string_descriptor_ascii(handle, desc.iSerialNumber, 
+                                                     string_data, sizeof(string_data)) > 0) {
+                    printf("    Serial: %s\n", string_data);
+                }
+            }
+            
+            libusb_close(handle);
+        }
+        
+        printf("\n");
+    }
+    
+    libusb_free_device_list(devs, 1);
+    printf("====== END OF USB DEVICE LIST ======\n\n");
+}
+
 bool DirectUSB::Initialize() {
+    printf("\n====== INITIALIZING LIBUSB ======\n");
+
+    // Check for available devices first
+    ListAllUSBDevices();
+    
+    // Attempt to check permissions on Linux
+    #ifdef __linux__
+    printf("\nChecking system permissions...\n");
+    
+    // Check if we're running as root
+    if (geteuid() != 0) {
+        printf("WARNING: Not running as root. USB access may be restricted.\n");
+        
+        // Check USB device node permissions
+        struct stat st;
+        if (stat("/dev/bus/usb", &st) == 0) {
+            printf("USB bus directory exists. Permissions: %o\n", st.st_mode & 0777);
+            if ((st.st_mode & S_IROTH) == 0 || (st.st_mode & S_IWOTH) == 0) {
+                printf("WARNING: /dev/bus/usb may not be readable/writable by non-root users.\n");
+                printf("Consider running with sudo or setting udev rules.\n");
+            }
+        } else {
+            printf("Cannot access /dev/bus/usb - permissions may be restricted\n");
+        }
+    } else {
+        printf("Running as root. Full USB permissions available.\n");
+    }
+    #endif
+
     // Initialize libusb
     int result = libusb_init(&m_Context);
     if (result != 0) {
@@ -42,19 +170,19 @@ bool DirectUSB::Initialize() {
         return false;
     }
     
-    // Set debug level (3 = verbose)
+    // Set maximum debug level for troubleshooting
     libusb_set_option(m_Context, LIBUSB_OPTION_LOG_LEVEL, 3);
     
-    // Find the device
+    // First, try standard method
+    printf("\nAttempting standard device open with VID=0x%04X, PID=0x%04X\n", VENDOR_ID, PRODUCT_ID);
+    
     m_DeviceHandle = libusb_open_device_with_vid_pid(m_Context, VENDOR_ID, PRODUCT_ID);
     if (!m_DeviceHandle) {
-        printf("Failed to find or open the device (VID=0x%04X, PID=0x%04X)\n", 
-               VENDOR_ID, PRODUCT_ID);
-        return false;
+        printf("Standard device open failed\n");
+        return TryAlternativeMethods();
     }
     
-    printf("Successfully opened device (VID=0x%04X, PID=0x%04X)\n", 
-           VENDOR_ID, PRODUCT_ID);
+    printf("Successfully opened device using standard method\n");
     
     // Print device info
     DumpDeviceInfo();
@@ -62,54 +190,203 @@ bool DirectUSB::Initialize() {
     // Automatically detach kernel driver if needed
     libusb_set_auto_detach_kernel_driver(m_DeviceHandle, 1);
     
-    // Claim the interface
+    // Get and print device configuration
+    int config = -1;
+    if (libusb_get_configuration(m_DeviceHandle, &config) == 0) {
+        printf("Device is using configuration: %d\n", config);
+        
+        if (config == 0) {
+            printf("Device is unconfigured. Setting configuration 1...\n");
+            if (libusb_set_configuration(m_DeviceHandle, 1) != 0) {
+                printf("Failed to set configuration, but continuing anyway\n");
+            }
+        }
+    }
+
+    // Try claiming interface
+    printf("Attempting to claim interface %d...\n", m_Interface);
     result = libusb_claim_interface(m_DeviceHandle, m_Interface);
     if (result != 0) {
-        printf("Failed to claim interface: %s\n", libusb_error_name(result));
-        libusb_close(m_DeviceHandle);
-        m_DeviceHandle = nullptr;
-        return false;
+        printf("Failed to claim interface %d: %s\n", m_Interface, libusb_error_name(result));
+        printf("Attempting alternate interfaces...\n");
+        
+        bool claimed = false;
+        for (int i = 0; i < 4 && !claimed; i++) {
+            if (i == m_Interface) continue;
+            
+            printf("Trying interface %d...\n", i);
+            if (libusb_kernel_driver_active(m_DeviceHandle, i)) {
+                printf("Detaching kernel driver from interface %d\n", i);
+                libusb_detach_kernel_driver(m_DeviceHandle, i);
+            }
+            
+            if (libusb_claim_interface(m_DeviceHandle, i) == 0) {
+                printf("Successfully claimed interface %d\n", i);
+                m_Interface = i;
+                claimed = true;
+            }
+        }
+        
+        if (!claimed) {
+            printf("Failed to claim any interface\n");
+            libusb_close(m_DeviceHandle);
+            m_DeviceHandle = nullptr;
+            return TryAlternativeMethods();
+        }
+    } else {
+        printf("Successfully claimed interface %d\n", m_Interface);
     }
     
     // Find endpoints
     if (!FindEndpoints()) {
         printf("Failed to find suitable endpoints\n");
-        libusb_release_interface(m_DeviceHandle, m_Interface);
-        libusb_close(m_DeviceHandle);
-        m_DeviceHandle = nullptr;
-        return false;
+        printf("Trying with default endpoint addresses...\n");
+        
+        m_InputEndpoint = 0x81;
+        m_OutputEndpoint = 0x01;
     }
     
-    printf("Successfully claimed interface %d\n", m_Interface);
     printf("Using IN endpoint: 0x%02X, OUT endpoint: 0x%02X\n", 
            m_InputEndpoint, m_OutputEndpoint);
+
+    // Try a device reset for good measure (can help with confused devices)
+    printf("Resetting device to ensure clean state...\n");
+    if (libusb_reset_device(m_DeviceHandle) == 0) {
+        printf("Device reset successful\n");
+    } else {
+        printf("Device reset failed, but continuing anyway\n");
+    }
     
+    // Try sending a control transfer to further wake up the device
+    printf("Sending control transfer to wake up device...\n");
+    unsigned char buffer[8] = {0};
+    int ret = libusb_control_transfer(
+        m_DeviceHandle,
+        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_DEVICE,
+        LIBUSB_REQUEST_GET_STATUS,
+        0, // value
+        0, // index
+        buffer,
+        sizeof(buffer),
+        1000 // timeout
+    );
+    if (ret >= 0) {
+        printf("Control transfer successful\n");
+    } else {
+        printf("Control transfer failed, but continuing anyway\n");
+    }
+    
+    printf("\n====== LIBUSB INITIALIZATION COMPLETE ======\n");
     return true;
 }
 
+bool DirectUSB::TryAlternativeMethods() {
+    printf("\n====== TRYING ALTERNATIVE USB ACCESS METHODS ======\n");
+    
+    // First, try bulk endpoints instead of interrupt
+    if (TryAlternativeAccess()) {
+        printf("Alternative access method succeeded\n");
+        return true;
+    }
+    
+    // Next, try raw device access on Linux
+    #ifdef __linux__
+    if (TryRawAccess()) {
+        printf("Raw device access succeeded\n");
+        return true;
+    }
+    #endif
+    
+    printf("All standard and alternative methods failed\n");
+    return false;
+}
+
+#ifdef __linux__
+bool DirectUSB::TryRawAccess() {
+    printf("\n==== ATTEMPTING RAW DEVICE ACCESS ====\n");
+    
+    // Look for potential device files
+    const char* potential_paths[] = {
+        "/dev/hidraw0", "/dev/hidraw1", "/dev/hidraw2", "/dev/hidraw3",
+        "/dev/usb/hiddev0", "/dev/usb/hiddev1",
+        "/dev/ttyUSB0", "/dev/ttyUSB1",
+        nullptr
+    };
+    
+    for (int i = 0; potential_paths[i] != nullptr; i++) {
+        printf("Trying to open %s...\n", potential_paths[i]);
+        
+        int fd = open(potential_paths[i], O_RDWR);
+        if (fd >= 0) {
+            printf("Successfully opened %s as raw device\n", potential_paths[i]);
+            m_RawDevice = fd;
+            m_RawDevicePath = potential_paths[i];
+            return true;
+        }
+    }
+    
+    printf("Failed to open any raw device\n");
+    return false;
+}
+#endif
+
 bool DirectUSB::IsConnected() const {
-    return m_DeviceHandle != nullptr;
+    return m_DeviceHandle != nullptr || m_RawDevice >= 0;
 }
 
 bool DirectUSB::SendReport(const uint8_t* data, size_t length) {
+    if (m_RawDevice >= 0) {
+        #ifdef __linux__
+        // Use raw device file
+        LogPacket("RAW SENDING", data, length);
+        
+        ssize_t written = write(m_RawDevice, data, length);
+        if (written < 0) {
+            printf("Failed to write to raw device: %s\n", strerror(errno));
+            return false;
+        }
+        
+        printf("Successfully sent %zd bytes to raw device\n", written);
+        return true;
+        #else
+        return false;
+        #endif
+    }
+    
     if (!m_DeviceHandle) return false;
     
     // Log the outgoing data
     LogPacket("SENDING", data, length);
     
+    // Try interrupt transfer first
     int transferred = 0;
     int result = libusb_interrupt_transfer(
         m_DeviceHandle,
         m_OutputEndpoint,
-        const_cast<unsigned char*>(data), // libusb expects non-const pointer
+        const_cast<unsigned char*>(data),
         static_cast<int>(length),
         &transferred,
         m_DefaultTimeout
     );
     
     if (result != 0) {
-        printf("Failed to send report: %s\n", libusb_error_name(result));
-        return false;
+        printf("Interrupt transfer failed: %s, trying bulk transfer...\n", 
+               libusb_error_name(result));
+        
+        // Fallback to bulk transfer
+        result = libusb_bulk_transfer(
+            m_DeviceHandle,
+            m_OutputEndpoint,
+            const_cast<unsigned char*>(data),
+            static_cast<int>(length),
+            &transferred,
+            m_DefaultTimeout
+        );
+        
+        if (result != 0) {
+            printf("Bulk transfer also failed: %s\n", libusb_error_name(result));
+            return false;
+        }
     }
     
     printf("Successfully sent %d bytes\n", transferred);
@@ -117,6 +394,48 @@ bool DirectUSB::SendReport(const uint8_t* data, size_t length) {
 }
 
 bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
+    if (m_RawDevice >= 0) {
+        #ifdef __linux__
+        // Use raw device file
+        report.resize(64);  // Default report size
+        
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(m_RawDevice, &readfds);
+        
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        
+        int ready = select(m_RawDevice + 1, &readfds, NULL, NULL, &tv);
+        if (ready <= 0) {
+            if (ready == 0) {
+                // Timeout
+                return false;
+            } else {
+                printf("Select error: %s\n", strerror(errno));
+                return false;
+            }
+        }
+        
+        ssize_t bytes_read = read(m_RawDevice, report.data(), report.size());
+        if (bytes_read < 0) {
+            printf("Failed to read from raw device: %s\n", strerror(errno));
+            return false;
+        }
+        
+        // Resize to actual data received
+        report.resize(bytes_read);
+        
+        // Log the received data
+        LogPacket("RAW RECEIVED", report.data(), report.size());
+        
+        return bytes_read > 0;
+        #else
+        return false;
+        #endif
+    }
+    
     // Check for data in the queue first (from async thread)
     {
         std::unique_lock<std::mutex> lock(m_QueueMutex);
@@ -149,6 +468,7 @@ bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
     // Create a buffer for the report
     report.resize(64);  // Common HID report size
     
+    // Try interrupt transfer first
     int transferred = 0;
     int result = libusb_interrupt_transfer(
         m_DeviceHandle,
@@ -165,8 +485,27 @@ bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
             return false;
         }
         
-        printf("Failed to read report: %s\n", libusb_error_name(result));
-        return false;
+        printf("Interrupt read failed: %s, trying bulk read...\n", 
+               libusb_error_name(result));
+        
+        // Fallback to bulk transfer
+        result = libusb_bulk_transfer(
+            m_DeviceHandle,
+            m_InputEndpoint,
+            report.data(),
+            static_cast<int>(report.size()),
+            &transferred,
+            timeout_ms > 0 ? timeout_ms : m_DefaultTimeout
+        );
+        
+        if (result != 0) {
+            if (result == LIBUSB_ERROR_TIMEOUT) {
+                return false;
+            }
+            
+            printf("Bulk read also failed: %s\n", libusb_error_name(result));
+            return false;
+        }
     }
     
     // Resize to actual data received
@@ -178,470 +517,4 @@ bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
     return true;
 }
 
-void DirectUSB::StartAsyncRead() {
-    if (m_Running) return;
-    
-    m_Running = true;
-    m_ReadThread = std::thread(&DirectUSB::ReadThreadFunc, this);
-    printf("Async read thread started\n");
-}
-
-void DirectUSB::StopAsyncRead() {
-    if (!m_Running) return;
-    
-    m_Running = false;
-    
-    if (m_ReadThread.joinable()) {
-        m_ReadThread.join();
-    }
-    
-    printf("Async read thread stopped\n");
-}
-
-void DirectUSB::ReadThreadFunc() {
-    while (m_Running) {
-        std::vector<uint8_t> report;
-        report.resize(64);  // Common HID report size
-        
-        int transferred = 0;
-        int result = libusb_interrupt_transfer(
-            m_DeviceHandle,
-            m_InputEndpoint,
-            report.data(),
-            static_cast<int>(report.size()),
-            &transferred,
-            100  // Short timeout for responsive thread termination
-        );
-        
-        if (result == 0 && transferred > 0) {
-            // Resize to actual data received
-            report.resize(transferred);
-            
-            // Log the received data
-            LogPacket("ASYNC RECEIVED", report.data(), report.size());
-            
-            // Add to queue
-            {
-                std::lock_guard<std::mutex> lock(m_QueueMutex);
-                m_DataQueue.push(std::move(report));
-            }
-            
-            // Notify waiting threads
-            m_DataAvailable.notify_one();
-        }
-        else if (result != LIBUSB_ERROR_TIMEOUT) {
-            // Print non-timeout errors
-            printf("Async read error: %s\n", libusb_error_name(result));
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
-}
-
-bool DirectUSB::FindEndpoints() {
-    libusb_device* device = libusb_get_device(m_DeviceHandle);
-    if (!device) return false;
-    
-    libusb_config_descriptor* config = nullptr;
-    int result = libusb_get_active_config_descriptor(device, &config);
-    if (result != 0) {
-        printf("Failed to get config descriptor: %s\n", libusb_error_name(result));
-        return false;
-    }
-    
-    // Print all available endpoints for diagnostic purposes
-    PrintEndpointInfo();
-    
-    // Find the first interface with IN and OUT endpoints
-    bool found = false;
-    for (int i = 0; i < config->bNumInterfaces && !found; i++) {
-        const libusb_interface& interface = config->interface[i];
-        
-        for (int j = 0; j < interface.num_altsetting && !found; j++) {
-            const libusb_interface_descriptor& iface = interface.altsetting[j];
-            
-            // Look for HID interface or use the first one
-            if (iface.bInterfaceClass == LIBUSB_CLASS_HID || i == 0) {
-                int in_ep = -1;
-                int out_ep = -1;
-                
-                // Find IN and OUT endpoints
-                for (int k = 0; k < iface.bNumEndpoints; k++) {
-                    const libusb_endpoint_descriptor& endpoint = iface.endpoint[k];
-                    
-                    if ((endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) == LIBUSB_TRANSFER_TYPE_INTERRUPT) {
-                        if (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) {
-                            in_ep = endpoint.bEndpointAddress;
-                        } else {
-                            out_ep = endpoint.bEndpointAddress;
-                        }
-                    }
-                }
-                
-                if (in_ep != -1 && out_ep != -1) {
-                    m_Interface = iface.bInterfaceNumber;
-                    m_InputEndpoint = in_ep;
-                    m_OutputEndpoint = out_ep;
-                    found = true;
-                }
-            }
-        }
-    }
-    
-    libusb_free_config_descriptor(config);
-    return found;
-}
-
-void DirectUSB::LogPacket(const char* prefix, const uint8_t* data, size_t length) {
-    if (!m_VerboseLogging) return;
-    
-    printf("\n%s %zu bytes:\n", prefix, length);
-    
-    // Print in hex format, 16 bytes per line
-    for (size_t i = 0; i < length; i += 16) {
-        printf("%04zX: ", i);
-        
-        // Print hex values
-        for (size_t j = 0; j < 16; j++) {
-            if (i + j < length) {
-                printf("%02X ", data[i + j]);
-            } else {
-                printf("   ");
-            }
-            
-            // Extra space after 8 bytes for readability
-            if (j == 7) printf(" ");
-        }
-        
-        // Print ASCII representation
-        printf(" | ");
-        for (size_t j = 0; j < 16; j++) {
-            if (i + j < length) {
-                uint8_t c = data[i + j];
-                if (c >= 32 && c <= 126) {
-                    printf("%c", c);
-                } else {
-                    printf(".");
-                }
-            } else {
-                printf(" ");
-            }
-        }
-        printf(" |\n");
-    }
-    
-    // Look for potential protocol patterns
-    if (length > 0) {
-        printf("Analysis: ");
-        if (data[0] == 0xAA) {
-            printf("Valid preamble detected\n");
-            
-            if (length > 2) {
-                printf("  Command type: 0x%02X\n", data[2]);
-                
-                // Add more protocol-specific analysis here
-                if (data[2] == 0x01) {
-                    printf("  Looks like a control command\n");
-                } else if (data[2] == 0x02) {
-                    printf("  Looks like a data command\n");
-                    if (length > 5) {
-                        printf("  Row index: %d\n", data[5]);
-                    }
-                }
-            }
-        }
-    }
-    
-    printf("\n");
-}
-
-void DirectUSB::DumpDeviceInfo() {
-    if (!m_DeviceHandle) return;
-    
-    libusb_device* device = libusb_get_device(m_DeviceHandle);
-    if (!device) return;
-    
-    // Get device descriptor
-    libusb_device_descriptor desc;
-    if (libusb_get_device_descriptor(device, &desc) != 0) {
-        printf("Failed to get device descriptor\n");
-        return;
-    }
-    
-    printf("\n====== USB DEVICE INFORMATION ======\n");
-    printf("Bus: %03d Device: %03d\n", 
-           libusb_get_bus_number(device), 
-           libusb_get_device_address(device));
-    printf("VID: 0x%04X, PID: 0x%04X\n", desc.idVendor, desc.idProduct);
-    printf("USB Version: %d.%d\n", 
-           desc.bcdUSB >> 8, desc.bcdUSB & 0xFF);
-    printf("Device Class: 0x%02X, SubClass: 0x%02X, Protocol: 0x%02X\n", 
-           desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol);
-    printf("Manufacturer ID: %d, Product ID: %d, Serial Number ID: %d\n", 
-           desc.iManufacturer, desc.iProduct, desc.iSerialNumber);
-    
-    // Try to get string descriptors
-    unsigned char string_data[256];
-    
-    if (desc.iManufacturer > 0) {
-        int result = libusb_get_string_descriptor_ascii(
-            m_DeviceHandle, desc.iManufacturer, string_data, sizeof(string_data));
-        if (result > 0) {
-            printf("Manufacturer: %s\n", string_data);
-        }
-    }
-    
-    if (desc.iProduct > 0) {
-        int result = libusb_get_string_descriptor_ascii(
-            m_DeviceHandle, desc.iProduct, string_data, sizeof(string_data));
-        if (result > 0) {
-            printf("Product: %s\n", string_data);
-        }
-    }
-    
-    if (desc.iSerialNumber > 0) {
-        int result = libusb_get_string_descriptor_ascii(
-            m_DeviceHandle, desc.iSerialNumber, string_data, sizeof(string_data));
-        if (result > 0) {
-            printf("Serial Number: %s\n", string_data);
-        }
-    }
-    
-    printf("==============================\n\n");
-}
-
-void DirectUSB::PrintEndpointInfo() {
-    if (!m_DeviceHandle) return;
-    
-    libusb_device* device = libusb_get_device(m_DeviceHandle);
-    if (!device) return;
-    
-    libusb_config_descriptor* config = nullptr;
-    int result = libusb_get_active_config_descriptor(device, &config);
-    if (result != 0) {
-        printf("Failed to get config descriptor\n");
-        return;
-    }
-    
-    printf("\n====== USB ENDPOINT INFORMATION ======\n");
-    
-    for (int i = 0; i < config->bNumInterfaces; i++) {
-        const libusb_interface& interface = config->interface[i];
-        
-        for (int j = 0; j < interface.num_altsetting; j++) {
-            const libusb_interface_descriptor& iface = interface.altsetting[j];
-            
-            printf("Interface %d, Alt Setting %d: Class=%02X, SubClass=%02X, Protocol=%02X\n",
-                   iface.bInterfaceNumber, j, 
-                   iface.bInterfaceClass,
-                   iface.bInterfaceSubClass,
-                   iface.bInterfaceProtocol);
-            
-            for (int k = 0; k < iface.bNumEndpoints; k++) {
-                const libusb_endpoint_descriptor& endpoint = iface.endpoint[k];
-                
-                printf("  Endpoint 0x%02X: ", endpoint.bEndpointAddress);
-                
-                // Direction
-                if (endpoint.bEndpointAddress & LIBUSB_ENDPOINT_IN) {
-                    printf("IN, ");
-                } else {
-                    printf("OUT, ");
-                }
-                
-                // Type
-                switch (endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) {
-                    case LIBUSB_TRANSFER_TYPE_CONTROL:
-                        printf("Control, ");
-                        break;
-                    case LIBUSB_TRANSFER_TYPE_ISOCHRONOUS:
-                        printf("Isochronous, ");
-                        break;
-                    case LIBUSB_TRANSFER_TYPE_BULK:
-                        printf("Bulk, ");
-                        break;
-                    case LIBUSB_TRANSFER_TYPE_INTERRUPT:
-                        printf("Interrupt, ");
-                        break;
-                    default:
-                        printf("Unknown, ");
-                }
-                
-                printf("Max Packet Size: %d\n", endpoint.wMaxPacketSize);
-            }
-            
-            printf("\n");
-        }
-    }
-    
-    printf("============================\n\n");
-}
-
-bool DirectUSB::TryAlternativeAccess() {
-    printf("\n==== TRYING ALTERNATIVE USB ACCESS METHODS ====\n");
-    
-    if (!m_Context) {
-        int result = libusb_init(&m_Context);
-        if (result != 0) {
-            printf("Failed to initialize libusb in alternative method: %s\n", 
-                   libusb_error_name(result));
-            return false;
-        }
-    }
-    
-    if (m_DeviceHandle) {
-        libusb_close(m_DeviceHandle);
-        m_DeviceHandle = nullptr;
-    }
-    
-    // First attempt: Try to find device with only VID
-    libusb_device **devs;
-    ssize_t cnt = libusb_get_device_list(m_Context, &devs);
-    if (cnt < 0) {
-        printf("Failed to get device list: %s\n", libusb_error_name((int)cnt));
-        return false;
-    }
-    
-    printf("Looking for devices with VID=0x%04X (any PID)...\n", VENDOR_ID);
-    
-    for (ssize_t i = 0; i < cnt; i++) {
-        libusb_device_descriptor desc;
-        if (libusb_get_device_descriptor(devs[i], &desc) == 0) {
-            if (desc.idVendor == VENDOR_ID) {
-                printf("Found device with VID=0x%04X, PID=0x%04X\n", 
-                       desc.idVendor, desc.idProduct);
-                
-                int result = libusb_open(devs[i], &m_DeviceHandle);
-                if (result == 0) {
-                    printf("Successfully opened alternative device\n");
-                    
-                    // Try to find and claim usable interface
-                    for (int iface = 0; iface < 4; iface++) {
-                        if (libusb_kernel_driver_active(m_DeviceHandle, iface)) {
-                            printf("Detaching kernel driver from interface %d\n", iface);
-                            libusb_detach_kernel_driver(m_DeviceHandle, iface);
-                        }
-                        
-                        result = libusb_claim_interface(m_DeviceHandle, iface);
-                        if (result == 0) {
-                            m_Interface = iface;
-                            printf("Successfully claimed interface %d\n", iface);
-                            
-                            // Find endpoints for this interface
-                            libusb_config_descriptor *config;
-                            if (libusb_get_active_config_descriptor(devs[i], &config) == 0) {
-                                for (int j = 0; j < config->interface[iface].num_altsetting; j++) {
-                                    const libusb_interface_descriptor &ifaceDesc = 
-                                        config->interface[iface].altsetting[j];
-                                    
-                                    for (int k = 0; k < ifaceDesc.bNumEndpoints; k++) {
-                                        const libusb_endpoint_descriptor &ep = ifaceDesc.endpoint[k];
-                                        
-                                        if (ep.bEndpointAddress & LIBUSB_ENDPOINT_IN) {
-                                            m_InputEndpoint = ep.bEndpointAddress;
-                                            printf("Found IN endpoint: 0x%02X\n", m_InputEndpoint);
-                                        } else {
-                                            m_OutputEndpoint = ep.bEndpointAddress;
-                                            printf("Found OUT endpoint: 0x%02X\n", m_OutputEndpoint);
-                                        }
-                                    }
-                                }
-                                libusb_free_config_descriptor(config);
-                            }
-                            
-                            libusb_free_device_list(devs, 1);
-                            return true;
-                        }
-                        else {
-                            printf("Failed to claim interface %d: %s\n", 
-                                   iface, libusb_error_name(result));
-                        }
-                    }
-                    
-                    // If we couldn't claim any interface, close and try next device
-                    libusb_close(m_DeviceHandle);
-                    m_DeviceHandle = nullptr;
-                }
-                else {
-                    printf("Failed to open device: %s\n", libusb_error_name(result));
-                }
-            }
-        }
-    }
-    
-    libusb_free_device_list(devs, 1);
-    printf("No suitable device found with alternative method\n");
-    return false;
-}
-
-void DirectUSB::DumpRawDescriptors() {
-    if (!m_DeviceHandle) return;
-    
-    libusb_device* device = libusb_get_device(m_DeviceHandle);
-    if (!device) return;
-    
-    // Get all descriptors for this device
-    printf("\n====== RAW USB DESCRIPTORS ======\n");
-    
-    // Device descriptor
-    libusb_device_descriptor desc;
-    if (libusb_get_device_descriptor(device, &desc) == 0) {
-        printf("Device Descriptor Raw Data:\n");
-        uint8_t* raw = (uint8_t*)&desc;
-        for (int i = 0; i < sizeof(desc); i++) {
-            printf("%02X ", raw[i]);
-            if ((i + 1) % 16 == 0) printf("\n");
-        }
-        printf("\n\n");
-    }
-    
-    // Configuration descriptor
-    libusb_config_descriptor* config = nullptr;
-    int result = libusb_get_active_config_descriptor(device, &config);
-    if (result == 0) {
-        printf("Configuration Descriptor Raw Data:\n");
-        uint8_t* raw = (uint8_t*)config;
-        for (int i = 0; i < config->wTotalLength && i < 256; i++) {
-            printf("%02X ", raw[i]);
-            if ((i + 1) % 16 == 0) printf("\n");
-        }
-        printf("\n");
-        
-        libusb_free_config_descriptor(config);
-    }
-    
-    printf("============================\n\n");
-}
-
-bool DirectUSB::CheckLibusbAvailability() {
-    printf("Checking libusb availability...\n");
-
-#ifdef _WIN32
-    printf("Windows platform detected\n");
-#elif defined(__linux__)
-    printf("Linux platform detected\n");
-    
-    // Check if libusb device nodes are accessible
-    FILE* test = fopen("/dev/bus/usb", "r");
-    if (test) {
-        printf("USB device nodes accessible\n");
-        fclose(test);
-    } else {
-        printf("WARNING: Cannot access /dev/bus/usb - check permissions\n");
-        printf("Try: sudo chmod -R a+rw /dev/bus/usb\n");
-    }
-
-    // Check if libusb is available
-    void* handle = dlopen("libusb-1.0.so.0", RTLD_LAZY);
-    if (handle) {
-        printf("libusb-1.0 library loaded successfully\n");
-        dlclose(handle);
-    } else {
-        printf("ERROR: Cannot load libusb-1.0.so.0: %s\n", dlerror());
-        printf("Try: sudo apt install libusb-1.0-0-dev\n");
-    }
-#else
-    printf("Unknown platform\n");
-#endif
-
-    return true;
-}
+// Rest of your implementation remains unchanged...

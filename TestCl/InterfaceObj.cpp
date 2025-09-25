@@ -1,7 +1,6 @@
 // Copyright 2014-2023, Anitoa Systems, LLC
 // All rights reserved
 
-// Add at the top of the file
 #include "InterfaceObj.h"
 #include "HidMgr.h"
 #include <cstring>
@@ -987,7 +986,17 @@ int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
 // Update CaptureFrame12 to use the new detailed USB capture
 int CInterfaceObject::CaptureFrame12(uint8_t chan)
 {
-    // Try the detailed direct USB capture first
+    // Check device first
+    if (!g_DirectUSB.IsConnected()) {
+        printf("\n*** ERROR: Device not connected! ***\n");
+        printf("Attempting to initialize connection...\n");
+        if (!g_DirectUSB.Initialize()) {
+            printf("Failed to initialize device connection\n");
+            return -1;
+        }
+    }
+
+    // Try the detailed direct USB capture
     int direct_result = DirectUSBCapture12(chan);
     
     // If direct USB failed completely, fall back to the Windows style
@@ -997,4 +1006,57 @@ int CInterfaceObject::CaptureFrame12(uint8_t chan)
     }
     
     return direct_result;
+}
+
+void CInterfaceObject::Initialize()
+{
+    // Possible initialization code here
+    
+#ifdef __linux__
+    // Check if we're on a Raspberry Pi
+    FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (cpuinfo) {
+        char line[256];
+        bool is_raspberry_pi = false;
+        
+        while (fgets(line, sizeof(line), cpuinfo)) {
+            if (strstr(line, "Raspberry Pi")) {
+                is_raspberry_pi = true;
+                break;
+            }
+        }
+        fclose(cpuinfo);
+        
+        if (is_raspberry_pi) {
+            printf("\n*** Raspberry Pi detected! ***\n");
+            printf("Applying Raspberry Pi specific optimizations\n");
+            
+            // Check if udev rules are set up
+            FILE* udev_file = fopen("/etc/udev/rules.d/99-hiddevices.rules", "r");
+            if (!udev_file) {
+                printf("WARNING: udev rules for USB devices not found!\n");
+                printf("You may need to create the file: /etc/udev/rules.d/99-hiddevices.rules\n");
+                printf("With content: SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"%04x\", ATTRS{idProduct}==\"%04x\", MODE=\"0666\"\n", 
+                       VENDOR_ID, PRODUCT_ID);
+                printf("Then run: sudo udevadm control --reload-rules && sudo udevadm trigger\n");
+                
+                // Automatically create the udev rule if we have permission
+                if (geteuid() == 0) {
+                    printf("Creating udev rule automatically (running as root)...\n");
+                    FILE* udev_out = fopen("/etc/udev/rules.d/99-hiddevices.rules", "w");
+                    if (udev_out) {
+                        fprintf(udev_out, "SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"%04x\", ATTRS{idProduct}==\"%04x\", MODE=\"0666\"\n", 
+                                VENDOR_ID, PRODUCT_ID);
+                        fclose(udev_out);
+                        system("udevadm control --reload-rules && udevadm trigger");
+                        printf("udev rules created and reloaded\n");
+                    }
+                }
+            } else {
+                fclose(udev_file);
+                printf("USB device udev rules found\n");
+            }
+        }
+    }
+#endif
 }
