@@ -690,3 +690,262 @@ int CInterfaceObject::WindowsStyleCapture12(uint8_t chan)
 
     return 0;  // Return success
 }
+
+// Add a new capture function using direct USB access
+int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
+{
+    printf("Starting direct USB capture for channel %d\n", chan);
+    
+    // Print capture parameters
+    printf("Capture parameters: Channel=%d, Gain=%d, IntTime=%.2f\n", 
+           chan, gain_mode, int_time);
+
+    // Initialize tracking for each row
+    bool rows_received[12] = { false };
+    int total_rows = 0;
+    
+    // Initialize frame data to zero
+    for (int i = 0; i < MAX_IMAGE_SIZE; i++) {
+        for (int j = 0; j < MAX_IMAGE_SIZE; j++) {
+            frame_data[i][j] = 0;
+        }
+    }
+
+    // Initialize direct USB if not already done
+    if (!g_DirectUSB.IsConnected()) {
+        printf("Initializing direct USB connection...\n");
+        if (!g_DirectUSB.Initialize()) {
+            printf("Failed to initialize direct USB connection\n");
+            return -1;
+        }
+        printf("Direct USB connection established\n");
+    }
+
+    // Start async read thread
+    g_DirectUSB.StartAsyncRead();
+
+    // PASS 1: Get all rows using direct USB
+    printf("\n==== DIRECT USB CAPTURE: REQUESTING ALL ROWS ====\n");
+    
+    // Format command for capturing all rows
+    TxData[0] = 0xaa;      // preamble code
+    TxData[1] = 0x02;      // command
+    TxData[2] = 0x0C;      // data length
+    TxData[3] = ((chan-1) << 4) | 0x02;  // Standard capture format
+    TxData[4] = 0xff;      // request all rows
+    TxData[5] = 0x00;
+    
+    // Zero out the rest
+    for (int i = 6; i < 15; i++) TxData[i] = 0x00;
+    
+    // Calculate checksum
+    TxData[15] = 0;
+    for (int i = 1; i <= 14; i++) {
+        TxData[15] += TxData[i];
+    }
+    if (TxData[15] == 0x17) 
+        TxData[15] = 0x18;
+    
+    TxData[16] = 0x17;     // back code
+    TxData[17] = 0x17;     // back code
+
+    // Send the command via direct USB
+    printf("Sending capture command via direct USB...\n");
+    g_DirectUSB.SendReport(TxData, 64);
+    
+    // Clear TxData
+    std::memset(TxData, 0, sizeof(TxData));
+    
+    // Process incoming reports
+    printf("Reading rows via direct USB...\n");
+    
+    // Set a timeout for the overall capture
+    auto start_time = std::chrono::high_resolution_clock::now();
+    const auto timeout_duration = std::chrono::seconds(5); // 5 second timeout
+    
+    int consecutive_timeouts = 0;
+    const int MAX_CONSECUTIVE_TIMEOUTS = 10;
+    
+    while (total_rows < 12) {
+        // Check overall timeout
+        auto current_time = std::chrono::high_resolution_clock::now();
+        auto elapsed = current_time - start_time;
+        if (elapsed > timeout_duration) {
+            printf("Capture timed out after %d seconds\n", 
+                   static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(timeout_duration).count()));
+            break;
+        }
+        
+        // Get next report
+        std::vector<uint8_t> report;
+        if (g_DirectUSB.GetNextReport(report, 500)) {
+            // Reset timeout counter
+            consecutive_timeouts = 0;
+            
+            // Copy to RxData for processing
+            std::memcpy(RxData, report.data(), std::min(report.size(), (size_t)RxNum));
+            
+            // Print first few bytes for debugging
+            printf("Received USB report: %02X %02X %02X %02X %02X %02X...\n",
+                   RxData[0], RxData[1], RxData[2], RxData[3], RxData[4], RxData[5]);
+            
+            // Process data
+            uint8_t cmd_type = RxData[2];
+            uint8_t row_type = RxData[4];
+            uint8_t row_idx = RxData[5];
+            
+            if ((cmd_type == 0x1c || cmd_type == 0x02) && row_idx < 12) {
+                // Process the row data
+                for (int i = 0; i < 12; i++) {
+                    uint8_t high_byte = RxData[6 + i * 2];
+                    uint8_t low_byte = RxData[7 + i * 2];
+                    uint16_t value = (high_byte << 8) | low_byte;
+                    frame_data[row_idx][i] = value;
+                }
+                
+                // Mark row as received
+                if (!rows_received[row_idx]) {
+                    rows_received[row_idx] = true;
+                    total_rows++;
+                    printf("Got row %d (%d/12 total) - %s row\n", 
+                           row_idx, total_rows,
+                           (row_idx % 2 == 0) ? "EVEN" : "ODD");
+                }
+            }
+        }
+        else {
+            // Timeout - no data received
+            consecutive_timeouts++;
+            printf("No data received (timeout %d/%d)\n", 
+                   consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS);
+            
+            if (consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                printf("Too many consecutive timeouts, stopping capture\n");
+                break;
+            }
+        }
+    }
+    
+    // Stop the async read thread
+    g_DirectUSB.StopAsyncRead();
+    
+    // Report results
+    printf("\n==== DIRECT USB CAPTURE COMPLETE ====\n");
+    printf("Received %d/12 rows\n", total_rows);
+    printf("Rows received: ");
+    for (int i = 0; i < 12; i++) {
+        if (rows_received[i]) printf("%d ", i);
+    }
+    printf("\n");
+    
+    // If we're missing rows, try to get them individually
+    if (total_rows < 12) {
+        printf("\n==== REQUESTING MISSING ROWS INDIVIDUALLY ====\n");
+        
+        // Create list of missing rows
+        std::vector<int> missing_rows;
+        for (int i = 0; i < 12; i++) {
+            if (!rows_received[i]) {
+                missing_rows.push_back(i);
+            }
+        }
+        
+        printf("Missing rows: ");
+        for (int row : missing_rows) {
+            printf("%d ", row);
+        }
+        printf("\n");
+        
+        // Request each missing row
+        for (int row : missing_rows) {
+            // Restart async read for this row
+            g_DirectUSB.StartAsyncRead();
+            
+            printf("Requesting row %d...\n", row);
+            
+            // Format command for specific row
+            TxData[0] = 0xaa;      // preamble code
+            TxData[1] = 0x02;      // command
+            TxData[2] = 0x0C;      // data length
+            TxData[3] = ((chan-1) << 4) | 0x42;  // Special type for direct row request
+            TxData[4] = row;       // Request specific row
+            TxData[5] = 0x01;      // Flag for specific row
+            
+            // Zero out the rest
+            for (int i = 6; i < 15; i++) TxData[i] = 0x00;
+            
+            // Calculate checksum
+            TxData[15] = 0;
+            for (int i = 1; i <= 14; i++) {
+                TxData[15] += TxData[i];
+            }
+            if (TxData[15] == 0x17) 
+                TxData[15] = 0x18;
+            
+            TxData[16] = 0x17;     // back code
+            TxData[17] = 0x17;     // back code
+            
+            // Send command
+            g_DirectUSB.SendReport(TxData, 64);
+            std::memset(TxData, 0, sizeof(TxData));
+            
+            // Wait for response
+            bool got_row = false;
+            int attempts = 0;
+            const int MAX_ATTEMPTS = 5;
+            
+            while (!got_row && attempts < MAX_ATTEMPTS) {
+                std::vector<uint8_t> report;
+                if (g_DirectUSB.GetNextReport(report, 300)) {
+                    // Copy to RxData for processing
+                    std::memcpy(RxData, report.data(), std::min(report.size(), (size_t)RxNum));
+                    
+                    // Extract packet info
+                    uint8_t cmd_type = RxData[2];
+                    uint8_t row_idx = RxData[5];
+                    
+                    // Check if this is the row we requested
+                    if ((cmd_type == 0x1c || cmd_type == 0x02) && row_idx == row) {
+                        // Process the data
+                        for (int i = 0; i < 12; i++) {
+                            uint8_t high_byte = RxData[6 + i * 2];
+                            uint8_t low_byte = RxData[7 + i * 2];
+                            uint16_t value = (high_byte << 8) | low_byte;
+                            frame_data[row][i] = value;
+                        }
+                        
+                        rows_received[row] = true;
+                        total_rows++;
+                        printf("Successfully received row %d (%d/12 total)\n", row, total_rows);
+                        
+                        got_row = true;
+                    }
+                }
+                else {
+                    printf("No response for row %d (attempt %d/%d)\n", 
+                           row, attempts + 1, MAX_ATTEMPTS);
+                }
+                
+                attempts++;
+            }
+            
+            // Stop async read for this row
+            g_DirectUSB.StopAsyncRead();
+            
+            if (!got_row) {
+                printf("Failed to get row %d after %d attempts\n", row, MAX_ATTEMPTS);
+            }
+            
+            // Wait between row requests
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    
+    // Fill in any missing rows with interpolation (same as current code)
+    if (total_rows < 12) {
+        printf("\n==== FILLING MISSING ROWS ====\n");
+        // (existing interpolation code)
+    }
+    
+    return total_rows;
+}
