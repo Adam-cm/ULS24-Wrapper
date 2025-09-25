@@ -7,6 +7,11 @@
 #include <iomanip>
 #include <sstream>
 
+#ifdef __linux__
+#include <dlfcn.h>
+#include <unistd.h>
+#endif
+
 // Global instance
 DirectUSB g_DirectUSB;
 
@@ -99,7 +104,7 @@ bool DirectUSB::SendReport(const uint8_t* data, size_t length) {
         const_cast<unsigned char*>(data), // libusb expects non-const pointer
         static_cast<int>(length),
         &transferred,
-        1000 // 1 second timeout
+        m_DefaultTimeout
     );
     
     if (result != 0) {
@@ -151,7 +156,7 @@ bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
         report.data(),
         static_cast<int>(report.size()),
         &transferred,
-        timeout_ms
+        timeout_ms > 0 ? timeout_ms : m_DefaultTimeout
     );
     
     if (result != 0) {
@@ -469,8 +474,103 @@ void DirectUSB::PrintEndpointInfo() {
     }
     
     printf("============================\n\n");
+}
+
+bool DirectUSB::TryAlternativeAccess() {
+    printf("\n==== TRYING ALTERNATIVE USB ACCESS METHODS ====\n");
     
-    libusb_free_config_descriptor(config);
+    if (!m_Context) {
+        int result = libusb_init(&m_Context);
+        if (result != 0) {
+            printf("Failed to initialize libusb in alternative method: %s\n", 
+                   libusb_error_name(result));
+            return false;
+        }
+    }
+    
+    if (m_DeviceHandle) {
+        libusb_close(m_DeviceHandle);
+        m_DeviceHandle = nullptr;
+    }
+    
+    // First attempt: Try to find device with only VID
+    libusb_device **devs;
+    ssize_t cnt = libusb_get_device_list(m_Context, &devs);
+    if (cnt < 0) {
+        printf("Failed to get device list: %s\n", libusb_error_name((int)cnt));
+        return false;
+    }
+    
+    printf("Looking for devices with VID=0x%04X (any PID)...\n", VENDOR_ID);
+    
+    for (ssize_t i = 0; i < cnt; i++) {
+        libusb_device_descriptor desc;
+        if (libusb_get_device_descriptor(devs[i], &desc) == 0) {
+            if (desc.idVendor == VENDOR_ID) {
+                printf("Found device with VID=0x%04X, PID=0x%04X\n", 
+                       desc.idVendor, desc.idProduct);
+                
+                int result = libusb_open(devs[i], &m_DeviceHandle);
+                if (result == 0) {
+                    printf("Successfully opened alternative device\n");
+                    
+                    // Try to find and claim usable interface
+                    for (int iface = 0; iface < 4; iface++) {
+                        if (libusb_kernel_driver_active(m_DeviceHandle, iface)) {
+                            printf("Detaching kernel driver from interface %d\n", iface);
+                            libusb_detach_kernel_driver(m_DeviceHandle, iface);
+                        }
+                        
+                        result = libusb_claim_interface(m_DeviceHandle, iface);
+                        if (result == 0) {
+                            m_Interface = iface;
+                            printf("Successfully claimed interface %d\n", iface);
+                            
+                            // Find endpoints for this interface
+                            libusb_config_descriptor *config;
+                            if (libusb_get_active_config_descriptor(devs[i], &config) == 0) {
+                                for (int j = 0; j < config->interface[iface].num_altsetting; j++) {
+                                    const libusb_interface_descriptor &ifaceDesc = 
+                                        config->interface[iface].altsetting[j];
+                                    
+                                    for (int k = 0; k < ifaceDesc.bNumEndpoints; k++) {
+                                        const libusb_endpoint_descriptor &ep = ifaceDesc.endpoint[k];
+                                        
+                                        if (ep.bEndpointAddress & LIBUSB_ENDPOINT_IN) {
+                                            m_InputEndpoint = ep.bEndpointAddress;
+                                            printf("Found IN endpoint: 0x%02X\n", m_InputEndpoint);
+                                        } else {
+                                            m_OutputEndpoint = ep.bEndpointAddress;
+                                            printf("Found OUT endpoint: 0x%02X\n", m_OutputEndpoint);
+                                        }
+                                    }
+                                }
+                                libusb_free_config_descriptor(config);
+                            }
+                            
+                            libusb_free_device_list(devs, 1);
+                            return true;
+                        }
+                        else {
+                            printf("Failed to claim interface %d: %s\n", 
+                                   iface, libusb_error_name(result));
+                        }
+                    }
+                    
+                    // If we couldn't claim any interface, close and try next device
+                    libusb_close(m_DeviceHandle);
+                    m_DeviceHandle = nullptr;
+                }
+                else {
+                    printf("Failed to open device: %s\n", libusb_error_name(result));
+                }
+            }
+        }
+    }
+    
+    libusb_free_device_list(devs, 1);
+    printf("No suitable device found with alternative method\n");
+    return false;
 }
 
 void DirectUSB::DumpRawDescriptors() {
@@ -510,4 +610,38 @@ void DirectUSB::DumpRawDescriptors() {
     }
     
     printf("============================\n\n");
+}
+
+bool DirectUSB::CheckLibusbAvailability() {
+    printf("Checking libusb availability...\n");
+
+#ifdef _WIN32
+    printf("Windows platform detected\n");
+#elif defined(__linux__)
+    printf("Linux platform detected\n");
+    
+    // Check if libusb device nodes are accessible
+    FILE* test = fopen("/dev/bus/usb", "r");
+    if (test) {
+        printf("USB device nodes accessible\n");
+        fclose(test);
+    } else {
+        printf("WARNING: Cannot access /dev/bus/usb - check permissions\n");
+        printf("Try: sudo chmod -R a+rw /dev/bus/usb\n");
+    }
+
+    // Check if libusb is available
+    void* handle = dlopen("libusb-1.0.so.0", RTLD_LAZY);
+    if (handle) {
+        printf("libusb-1.0 library loaded successfully\n");
+        dlclose(handle);
+    } else {
+        printf("ERROR: Cannot load libusb-1.0.so.0: %s\n", dlerror());
+        printf("Try: sudo apt install libusb-1.0-0-dev\n");
+    }
+#else
+    printf("Unknown platform\n");
+#endif
+
+    return true;
 }

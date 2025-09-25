@@ -725,10 +725,18 @@ int CInterfaceObject::DirectUSBCapture12(uint8_t chan)
     // Initialize direct USB if not already done
     if (!g_DirectUSB.IsConnected()) {
         printf("Initializing libusb connection...\n");
-        if (!g_DirectUSB.Initialize()) {
-            printf("Failed to initialize libusb connection\n");
+        bool success = g_DirectUSB.Initialize();
+        
+        if (!success) {
+            printf("First initialization attempt failed, trying alternative methods...\n");
+            success = g_DirectUSB.TryAlternativeAccess();
+        }
+        
+        if (!success) {
+            printf("Failed to initialize libusb connection after all attempts\n");
             return -1;
         }
+        
         printf("Libusb connection established\n");
         
         // Dump detailed USB information

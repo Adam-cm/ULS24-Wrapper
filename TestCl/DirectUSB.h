@@ -9,7 +9,15 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
-#include <libusb-1.0/libusb.h>
+
+// Platform-specific includes for libusb
+#ifdef _WIN32
+    // Windows-specific include path
+    #include "libusb.h"
+#else
+    // Linux/macOS standard path
+    #include <libusb-1.0/libusb.h>
+#endif
 
 // Device identification constants
 #define VENDOR_ID 0x0483  // STMicroelectronics
@@ -30,8 +38,12 @@ public:
     void StartAsyncRead();
     void StopAsyncRead();
 
+    // Alternative access methods for troubleshooting
+    bool TryAlternativeAccess();
+
     // Diagnostic functions
     void SetVerboseLogging(bool enable) { m_VerboseLogging = enable; }
+    bool CheckLibusbAvailability();
     void DumpDeviceInfo();
     void DumpRawDescriptors();
     void PrintEndpointInfo();
@@ -45,6 +57,7 @@ private:
     int m_Interface = 0;
     int m_InputEndpoint = 0x81;  // Default IN endpoint
     int m_OutputEndpoint = 0x01; // Default OUT endpoint
+    int m_DefaultTimeout = 5000; // Default timeout (5 seconds)
 
     // Thread management for async reads
     std::thread m_ReadThread;
