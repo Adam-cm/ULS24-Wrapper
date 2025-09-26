@@ -13,6 +13,10 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
+#include <libusb-1.0/libusb.h>  // For direct libusb access
+#include <errno.h>
+#include <fcntl.h>  // For open()
+#include <string.h> // For strerror()
 #endif
 
 // External references
@@ -28,12 +32,397 @@ extern uint8_t RxData[RxNum];
 
 // C++ linkage function - KEEP THIS OUTSIDE extern "C" block
 int reset_usb_endpoints() {
-#ifdef __linux__
     if (DeviceHandle) {
-        // Implementation for Linux could go here
-        return 1;  // Success
-    }
+#ifdef __linux__
+        printf("\n====== USB ENDPOINT RESET PROCEDURE STARTING ======\n");
+        printf("Device handle: %p\n", (void*)DeviceHandle);
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Try to get the current device path for diagnostic purposes
+        struct hid_device_info* devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
+        const char* device_path = nullptr;
+        if (devs) {
+            device_path = devs->path;
+            printf("Current device path: %s\n", device_path);
+            
+            // Try to get more device information
+            printf("  VID/PID: %04X:%04X\n", devs->vendor_id, devs->product_id);
+            printf("  Manufacturer: %ls\n", devs->manufacturer_string ? devs->manufacturer_string : L"(unknown)");
+            printf("  Product: %ls\n", devs->product_string ? devs->product_string : L"(unknown)");
+            printf("  Serial: %ls\n", devs->serial_number ? devs->serial_number : L"(unknown)");
+            printf("  Interface: %d\n", devs->interface_number);
+            
+            // If we're using the libusb backend of hidapi, this will be useful
+            if (devs->bus_type == HID_API_BUS_USB) {
+                printf("  Bus type: USB\n");
+            } else if (devs->bus_type == HID_API_BUS_BLUETOOTH) {
+                printf("  Bus type: Bluetooth\n");
+            } else if (devs->bus_type == HID_API_BUS_I2C) {
+                printf("  Bus type: I2C\n");
+            } else if (devs->bus_type == HID_API_BUS_SPI) {
+                printf("  Bus type: SPI\n");
+            } else {
+                printf("  Bus type: Unknown (%d)\n", devs->bus_type);
+            }
+            
+            // Don't free yet - we'll use this info later
+        } else {
+            printf("WARNING: Could not enumerate devices - %ls\n", hid_error(NULL));
+        }
+        
+        // Try sending a special reset command first (device-specific)
+        printf("\nSTEP 1: Sending device-specific reset command...\n");
+        unsigned char reset_data[HIDREPORTNUM] = { 0 };
+        reset_data[0] = 0;  // Report ID
+        reset_data[1] = 0xaa;  // Preamble
+        reset_data[2] = 0x01;  // Command type
+        reset_data[3] = 0x10;  // Reset command
+        
+        // Try to send reset command
+        int res = hid_write(DeviceHandle, reset_data, sizeof(reset_data));
+        if (res >= 0) {
+            printf("  Reset command sent successfully (%d bytes)\n", res);
+            
+            // Give device time to process reset
+            printf("  Waiting 100ms for device to process reset...\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            
+            // Try to read any response
+            unsigned char response[HIDREPORTNUM] = { 0 };
+            res = hid_read_timeout(DeviceHandle, response, sizeof(response), 100);
+            if (res > 0) {
+                printf("  Received response after reset command (%d bytes):\n  ", res);
+                for (int i = 0; i < std::min(res, 16); i++) {
+                    printf("%02X ", response[i]);
+                }
+                printf("%s\n", res > 16 ? "..." : "");
+            } else {
+                printf("  No response received after reset command\n");
+            }
+        } else {
+            printf("  Failed to send reset command: %ls\n", hid_error(DeviceHandle));
+        }
+
+        // Try direct USB reset using libusb if possible
+        printf("\nSTEP 2: Attempting direct libusb reset...\n");
+        bool libusb_reset_successful = false;
+        
+        // Only try libusb reset if we have the device path
+        if (device_path) {
+            // Extract bus/device number from the device path if possible
+            // Path format is often like "/dev/bus/usb/XXX/YYY" or contains hidrawZ
+            int bus_num = -1, dev_addr = -1;
+            
+            // Try to extract bus/device numbers from the path
+            if (sscanf(device_path, "/dev/bus/usb/%d/%d", &bus_num, &dev_addr) == 2) {
+                printf("  Extracted bus=%d, device=%d from path\n", bus_num, dev_addr);
+            } else {
+                // For hidraw devices, we need to look at the USB devices
+                printf("  Could not extract bus/device from path, attempting to find device by VID/PID\n");
+            }
+            
+            // Initialize libusb context
+            libusb_context *context = NULL;
+            if (libusb_init(&context) == 0) {
+                printf("  Initialized libusb context\n");
+                
+                // Get device list
+                libusb_device **list;
+                ssize_t count = libusb_get_device_list(context, &list);
+                
+                printf("  Found %zd USB devices\n", count);
+                
+                libusb_device *target_device = NULL;
+                for (ssize_t i = 0; i < count; i++) {
+                    libusb_device *device = list[i];
+                    struct libusb_device_descriptor desc;
+                    
+                    if (libusb_get_device_descriptor(device, &desc) == 0) {
+                        // Check if this is our device by VID/PID
+                        if (desc.idVendor == VENDOR_ID && desc.idProduct == PRODUCT_ID) {
+                            // If bus/device were extracted, confirm they match
+                            int this_bus = libusb_get_bus_number(device);
+                            int this_addr = libusb_get_device_address(device);
+                            
+                            printf("  Found matching device - bus=%d, addr=%d\n", this_bus, this_addr);
+                            
+                            if (bus_num == -1 || (this_bus == bus_num && this_addr == dev_addr)) {
+                                target_device = device;
+                                printf("  Target device found\n");
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (target_device) {
+                    // Open the device
+                    libusb_device_handle *handle = NULL;
+                    if (libusb_open(target_device, &handle) == 0) {
+                        printf("  Opened device with libusb\n");
+                        
+                        // Reset the device
+                        int reset_result = libusb_reset_device(handle);
+                        if (reset_result == 0) {
+                            printf("  Successfully reset device using libusb\n");
+                            libusb_reset_successful = true;
+                        } else {
+                            printf("  Failed to reset device: %s\n", libusb_error_name(reset_result));
+                            
+                            // Try individual endpoint reset
+                            printf("  Attempting to clear halt on endpoints...\n");
+                            
+                            // Try standard HID endpoints
+                            int in_ep = 0x81;  // IN endpoint (device to host)
+                            int out_ep = 0x01; // OUT endpoint (host to device)
+                            
+                            if (libusb_clear_halt(handle, in_ep) == 0) {
+                                printf("  Successfully cleared halt on IN endpoint 0x%02x\n", in_ep);
+                                libusb_reset_successful = true;
+                            } else {
+                                printf("  Failed to clear halt on IN endpoint 0x%02x\n", in_ep);
+                            }
+                            
+                            if (libusb_clear_halt(handle, out_ep) == 0) {
+                                printf("  Successfully cleared halt on OUT endpoint 0x%02x\n", out_ep);
+                                libusb_reset_successful = true;
+                            } else {
+                                printf("  Failed to clear halt on OUT endpoint 0x%02x\n", out_ep);
+                            }
+                        }
+                        
+                        // Close the device
+                        libusb_close(handle);
+                        printf("  Closed libusb device handle\n");
+                    } else {
+                        printf("  Failed to open device with libusb\n");
+                    }
+                } else {
+                    printf("  Could not find target device in libusb device list\n");
+                }
+                
+                // Free the list
+                libusb_free_device_list(list, 1);
+                
+                // Exit libusb context
+                libusb_exit(context);
+                printf("  Cleaned up libusb context\n");
+            } else {
+                printf("  Failed to initialize libusb context\n");
+            }
+        } else {
+            printf("  No device path available, skipping libusb direct reset\n");
+        }
+        
+        // Now free the enumeration if we used it
+        if (devs) {
+            hid_free_enumeration(devs);
+        }
+
+        // STEP 3: Close and reopen with HIDAPI
+        printf("\nSTEP 3: Closing and reopening device with HIDAPI...\n");
+        
+        // Close the device
+        printf("  Closing HID device...\n");
+        hid_close(DeviceHandle);
+        DeviceHandle = nullptr;
+        
+        // Short delay to let the device settle
+        printf("  Waiting 100ms for USB reset to complete...\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        // Reopen the device
+        printf("  Reopening HID device...\n");
+        DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+        if (DeviceHandle) {
+            printf("  Successfully reopened HIDAPI device\n");
+            
+            // Set non-blocking mode for maximum throughput
+            if (hid_set_nonblocking(DeviceHandle, 1) == 0) {
+                printf("  Set non-blocking mode successfully\n");
+            } else {
+                printf("  Failed to set non-blocking mode: %ls\n", hid_error(DeviceHandle));
+            }
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            printf("\n====== USB ENDPOINT RESET COMPLETED SUCCESSFULLY ======\n");
+            printf("Total reset time: %lld ms\n", duration.count());
+            
+            if (libusb_reset_successful) {
+                printf("libusb direct reset was successful\n");
+            }
+            
+            return 1;  // Success
+        } else {
+            printf("  Failed to reopen HIDAPI device: %ls\n", hid_error(NULL));
+            
+            // Try one more time with a longer delay
+            printf("  Waiting 500ms before retrying...\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+            printf("  Retrying device open...\n");
+            DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+            if (DeviceHandle) {
+                printf("  Successfully reopened HIDAPI device on second attempt\n");
+                
+                // Set non-blocking mode for maximum throughput
+                if (hid_set_nonblocking(DeviceHandle, 1) == 0) {
+                    printf("  Set non-blocking mode successfully\n");
+                } else {
+                    printf("  Failed to set non-blocking mode: %ls\n", hid_error(DeviceHandle));
+                }
+                
+                auto end_time = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+                printf("\n====== USB ENDPOINT RESET COMPLETED SUCCESSFULLY (SECOND ATTEMPT) ======\n");
+                printf("Total reset time: %lld ms\n", duration.count());
+                
+                return 1;  // Success
+            } else {
+                printf("  Failed to reopen HIDAPI device on second attempt: %ls\n", hid_error(NULL));
+                
+                // Try system commands as a last resort
+                printf("\nSTEP 4: Attempting system-level USB reset...\n");
+                
+                // Try to unbind and rebind the driver using sysfs
+                if (device_path && strstr(device_path, "hidraw")) {
+                    // Extract hidraw number
+                    int hidraw_num = -1;
+                    if (sscanf(strstr(device_path, "hidraw"), "hidraw%d", &hidraw_num) == 1) {
+                        printf("  Found hidraw device number: %d\n", hidraw_num);
+                        
+                        // Try to read the uevent file to get more info
+                        char uevent_path[256];
+                        snprintf(uevent_path, sizeof(uevent_path), "/sys/class/hidraw/hidraw%d/uevent", hidraw_num);
+                        
+                        FILE* uevent_file = fopen(uevent_path, "r");
+                        if (uevent_file) {
+                            char line[256];
+                            printf("  Device uevent information:\n");
+                            while (fgets(line, sizeof(line), uevent_file)) {
+                                printf("    %s", line);
+                            }
+                            fclose(uevent_file);
+                        } else {
+                            printf("  Could not open uevent file: %s\n", strerror(errno));
+                        }
+                    }
+                }
+                
+                auto end_time = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+                printf("\n====== USB ENDPOINT RESET FAILED ======\n");
+                printf("Total time spent attempting reset: %lld ms\n", duration.count());
+            }
+        }
+#elif defined(_WIN32)
+        // Windows implementation with enhanced diagnostics
+        printf("\n====== USB ENDPOINT RESET PROCEDURE STARTING (WINDOWS) ======\n");
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Try to get the current device path for diagnostic purposes
+        struct hid_device_info* devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
+        if (devs) {
+            printf("Current device path: %s\n", devs->path);
+            printf("  VID/PID: %04X:%04X\n", devs->vendor_id, devs->product_id);
+            printf("  Manufacturer: %ls\n", devs->manufacturer_string ? devs->manufacturer_string : L"(unknown)");
+            printf("  Product: %ls\n", devs->product_string ? devs->product_string : L"(unknown)");
+            printf("  Serial: %ls\n", devs->serial_number ? devs->serial_number : L"(unknown)");
+            printf("  Interface: %d\n", devs->interface_number);
+            
+            hid_free_enumeration(devs);
+        } else {
+            printf("WARNING: Could not enumerate devices - %ls\n", hid_error(NULL));
+        }
+        
+        // On Windows, try to send a reset command first
+        printf("\nSTEP 1: Sending device-specific reset command...\n");
+        unsigned char reset_data[HIDREPORTNUM] = { 0 };
+        reset_data[0] = 0;  // Report ID
+        reset_data[1] = 0xaa;  // Preamble
+        reset_data[2] = 0x01;  // Command type
+        reset_data[3] = 0x10;  // Reset command
+        
+        // Try to send reset command
+        int res = hid_write(DeviceHandle, reset_data, sizeof(reset_data));
+        if (res >= 0) {
+            printf("  Reset command sent successfully (%d bytes)\n", res);
+            
+            // Give device time to process reset
+            printf("  Waiting 100ms for device to process reset...\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } else {
+            printf("  Failed to send reset command: %ls\n", hid_error(DeviceHandle));
+        }
+        
+        // Close the device
+        printf("\nSTEP 2: Closing and reopening device with HIDAPI...\n");
+        printf("  Closing HID device...\n");
+        hid_close(DeviceHandle);
+        DeviceHandle = nullptr;
+        
+        // Give the OS time to clean up the device handle
+        printf("  Waiting 200ms for device resources to be released...\n");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        
+        // Reopen the device
+        printf("  Reopening HID device...\n");
+        DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+        if (DeviceHandle) {
+            printf("  Successfully reopened HIDAPI device\n");
+            
+            // Set non-blocking mode for maximum throughput
+            if (hid_set_nonblocking(DeviceHandle, 1) == 0) {
+                printf("  Set non-blocking mode successfully\n");
+            } else {
+                printf("  Failed to set non-blocking mode: %ls\n", hid_error(DeviceHandle));
+            }
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            printf("\n====== USB ENDPOINT RESET COMPLETED SUCCESSFULLY ======\n");
+            printf("Total reset time: %lld ms\n", duration.count());
+            
+            return 1;  // Success
+        } else {
+            printf("  Failed to reopen HIDAPI device on Windows: %ls\n", hid_error(NULL));
+            
+            // Try one more time with a longer delay
+            printf("  Waiting 500ms before retrying...\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+            printf("  Retrying device open...\n");
+            DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+            if (DeviceHandle) {
+                printf("  Successfully reopened HIDAPI device on second attempt\n");
+                
+                // Set non-blocking mode for maximum throughput
+                if (hid_set_nonblocking(DeviceHandle, 1) == 0) {
+                    printf("  Set non-blocking mode successfully\n");
+                } else {
+                    printf("  Failed to set non-blocking mode: %ls\n", hid_error(DeviceHandle));
+                }
+                
+                auto end_time = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+                printf("\n====== USB ENDPOINT RESET COMPLETED SUCCESSFULLY (SECOND ATTEMPT) ======\n");
+                printf("Total reset time: %lld ms\n", duration.count());
+                
+                return 1;  // Success
+            } else {
+                auto end_time = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+                printf("\n====== USB ENDPOINT RESET FAILED ======\n");
+                printf("Total time spent attempting reset: %lld ms\n", duration.count());
+                printf("Error: %ls\n", hid_error(NULL));
+            }
+        }
 #endif
+    } else {
+        printf("Cannot reset USB endpoints: No active device handle\n");
+    }
+    
     return 0;  // Not implemented or failed
 }
 

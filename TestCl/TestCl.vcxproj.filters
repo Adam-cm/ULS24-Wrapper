@@ -18,6 +18,7 @@
     <None Include="ReadMe.txt" />
     <None Include="..\hidapi\x64\hidapi.dll" />
     <None Include=".gitignore" />
+    <None Include="TestScript.py" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="targetver.h">
@@ -50,6 +51,9 @@
     <ClInclude Include="hidapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DirectUSB.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="TrimReader.cpp">
@@ -62,6 +66,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="InterfaceWrapper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DirectUSB.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
