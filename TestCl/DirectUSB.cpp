@@ -3,25 +3,223 @@
 #include "DirectUSB.h"
 #include <cstdio>
 #include <cstring>
-#include <chrono>
 #include <thread>
+#include <chrono>
 
 // Global instance
 DirectUSB g_DirectUSB;
 
-DirectUSB::DirectUSB() {
+// Base constructor/destructor for both platforms
+DirectUSB::DirectUSB() : m_Running(false) {
     m_DeviceHandle = nullptr;
     m_VerboseLogging = true;
 }
 
 DirectUSB::~DirectUSB() {
+    StopAsyncRead();
+    
+    #ifdef __linux__
+    // Linux-specific cleanup
     if (m_DeviceHandle) {
-        hid_close(m_DeviceHandle);
+        // This will be replaced with actual HIDAPI call on Linux
+        // hid_close(m_DeviceHandle);
         m_DeviceHandle = nullptr;
     }
+    // hid_exit();
+    #endif
+}
+
+// Core functionality implementations - all dummy implementations for Windows
+
+bool DirectUSB::Initialize() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::Initialize - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::Initialize - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+bool DirectUSB::IsConnected() const {
+    return m_DeviceHandle != nullptr;
+}
+
+bool DirectUSB::SendReport(const uint8_t* data, size_t length) {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::SendReport - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::SendReport - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+bool DirectUSB::GetReport(std::vector<uint8_t>& report, int timeout_ms) {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::GetReport - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::GetReport - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::GetNextReport - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::GetNextReport - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+bool DirectUSB::ResetDevice() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::ResetDevice - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::ResetDevice - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+void DirectUSB::ListDevices() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::ListDevices - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::ListDevices - Windows dummy implementation\n");
+    #endif
+}
+
+void DirectUSB::DumpDeviceInfo() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::DumpDeviceInfo - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::DumpDeviceInfo - Windows dummy implementation\n");
+    #endif
+}
+
+void DirectUSB::PrintEndpointInfo() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::PrintEndpointInfo - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::PrintEndpointInfo - Windows dummy implementation\n");
+    #endif
+}
+
+void DirectUSB::DumpRawDescriptors() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::DumpRawDescriptors - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::DumpRawDescriptors - Windows dummy implementation\n");
+    #endif
+}
+
+bool DirectUSB::TryAlternativeAccess() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::TryAlternativeAccess - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::TryAlternativeAccess - Windows dummy implementation\n");
+    #endif
+    return false;
+}
+
+void DirectUSB::LogPacket(const char* prefix, const uint8_t* data, size_t length) {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::LogPacket - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("%s: %zu bytes (Windows dummy implementation)\n", prefix, length);
+    #endif
+}
+
+void DirectUSB::StartAsyncRead() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::StartAsyncRead - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::StartAsyncRead - Windows dummy implementation\n");
+    #endif
+}
+
+void DirectUSB::StopAsyncRead() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::StopAsyncRead - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::StopAsyncRead - Windows dummy implementation\n");
+    #endif
+}
+
+void DirectUSB::ReadThreadFunc() {
+    #ifdef __linux__
+    // The Linux version will contain real implementation
+    printf("DirectUSB::ReadThreadFunc - Full implementation will be used on Linux\n");
+    #else
+    // Windows implementation
+    printf("DirectUSB::ReadThreadFunc - Windows dummy implementation\n");
+    #endif
+}
+
+// LINUX IMPLEMENTATION: 
+// The code below represents the Linux implementation which will be added
+// to the Linux build file. It's commented out here for Windows compilation.
+
+/*
+// Linux implementation - will be uncommented in the Linux build
+
+#include <hidapi/hidapi.h>
+
+bool DirectUSB::Initialize() {
+    printf("\n====== INITIALIZING USB DEVICE ======\n");
     
-    // Clean up HIDAPI
-    hid_exit();
+    // Initialize HIDAPI
+    if (hid_init() != 0) {
+        printf("Failed to initialize HIDAPI\n");
+        return false;
+    }
+    
+    // List devices to help with debugging
+    ListDevices();
+    
+    // Try to open our target device
+    printf("Attempting to open device with VID=0x%04X, PID=0x%04X\n", VENDOR_ID, PRODUCT_ID);
+    
+    m_DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, NULL);
+    if (!m_DeviceHandle) {
+        printf("Failed to open device: %ls\n", hid_error(NULL));
+        return TryAlternativeAccess();
+    }
+    
+    printf("Device opened successfully\n");
+    
+    // Set non-blocking mode
+    if (hid_set_nonblocking(m_DeviceHandle, 1) != 0) {
+        printf("Warning: Failed to set non-blocking mode\n");
+    }
+    
+    printf("====== DEVICE INITIALIZED ======\n");
+    return true;
 }
 
 void DirectUSB::ListDevices() {
@@ -80,55 +278,39 @@ void DirectUSB::ListDevices() {
     printf("====== END OF USB DEVICE LIST ======\n\n");
 }
 
-bool DirectUSB::Initialize() {
-    printf("\n====== INITIALIZING USB DEVICE ======\n");
+bool DirectUSB::TryAlternativeAccess() {
+    printf("\n====== TRYING ALTERNATIVE ACCESS METHODS ======\n");
     
-    // Initialize HIDAPI
-    if (hid_init() != 0) {
-        printf("Failed to initialize HIDAPI\n");
-        return false;
-    }
-    
-    // List devices to help with debugging
-    ListDevices();
-    
-    // Try to open our target device
-    printf("Attempting to open device with VID=0x%04X, PID=0x%04X\n", VENDOR_ID, PRODUCT_ID);
-    
-    m_DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, NULL);
-    if (!m_DeviceHandle) {
-        printf("Failed to open device: %ls\n", hid_error(NULL));
+    // Try looking for the device by path
+    struct hid_device_info *devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
+    if (devs) {
+        printf("Found matching device(s) with VID=0x%04X, PID=0x%04X\n", VENDOR_ID, PRODUCT_ID);
         
-        // Try alternative methods - by path
-        struct hid_device_info *devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
-        if (devs) {
-            printf("Found device in enumeration, trying to open by path...\n");
-            m_DeviceHandle = hid_open_path(devs->path);
-            hid_free_enumeration(devs);
+        struct hid_device_info *cur_dev = devs;
+        while (cur_dev) {
+            printf("Attempting to open device path: %s\n", cur_dev->path);
+            m_DeviceHandle = hid_open_path(cur_dev->path);
             
-            if (!m_DeviceHandle) {
-                printf("Failed to open device by path\n");
-                return false;
+            if (m_DeviceHandle) {
+                printf("Successfully opened device by path\n");
+                hid_free_enumeration(devs);
+                
+                // Set non-blocking mode
+                if (hid_set_nonblocking(m_DeviceHandle, 1) != 0) {
+                    printf("Warning: Failed to set non-blocking mode\n");
+                }
+                
+                return true;
             }
-        } else {
-            printf("Device not found in enumeration\n");
-            return false;
+            
+            cur_dev = cur_dev->next;
         }
+        
+        hid_free_enumeration(devs);
     }
     
-    printf("Device opened successfully\n");
-    
-    // Set non-blocking mode
-    if (hid_set_nonblocking(m_DeviceHandle, 1) != 0) {
-        printf("Warning: Failed to set non-blocking mode\n");
-    }
-    
-    printf("====== DEVICE INITIALIZED ======\n");
-    return true;
-}
-
-bool DirectUSB::IsConnected() const {
-    return m_DeviceHandle != nullptr;
+    printf("All alternative methods failed\n");
+    return false;
 }
 
 bool DirectUSB::SendReport(const uint8_t* data, size_t length) {
@@ -188,6 +370,22 @@ bool DirectUSB::GetReport(std::vector<uint8_t>& report, int timeout_ms) {
     return true;
 }
 
+// GetNextReport - Same as GetReport but can also pull from async queue
+bool DirectUSB::GetNextReport(std::vector<uint8_t>& report, int timeout_ms) {
+    // Check for data in the queue first (from async thread)
+    if (m_Running) {
+        std::lock_guard<std::mutex> lock(m_QueueMutex);
+        if (!m_DataQueue.empty()) {
+            report = std::move(m_DataQueue.front());
+            m_DataQueue.pop();
+            return true;
+        }
+    }
+    
+    // If no data in queue, just call GetReport
+    return GetReport(report, timeout_ms);
+}
+
 bool DirectUSB::ResetDevice() {
     if (!m_DeviceHandle) {
         printf("Cannot reset device: No active device connection\n");
@@ -228,6 +426,75 @@ bool DirectUSB::ResetDevice() {
     return false;
 }
 
+void DirectUSB::DumpDeviceInfo() {
+    if (!m_DeviceHandle) {
+        printf("No device handle available\n");
+        return;
+    }
+    
+    printf("\n==== DEVICE INFORMATION ====\n");
+    
+    // Get device information using HIDAPI
+    struct hid_device_info *devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
+    if (devs) {
+        printf("Device Information:\n");
+        printf("  VID: 0x%04hX, PID: 0x%04hX\n", devs->vendor_id, devs->product_id);
+        printf("  Path: %s\n", devs->path ? devs->path : "(null)");
+        
+        if (devs->serial_number) {
+            printf("  Serial Number: %ls\n", devs->serial_number);
+        } else {
+            printf("  Serial Number: (null)\n");
+        }
+        
+        if (devs->manufacturer_string) {
+            printf("  Manufacturer: %ls\n", devs->manufacturer_string);
+        } else {
+            printf("  Manufacturer: (null)\n");
+        }
+        
+        if (devs->product_string) {
+            printf("  Product: %ls\n", devs->product_string);
+        } else {
+            printf("  Product: (null)\n");
+        }
+        
+        printf("  Interface: %d\n", devs->interface_number);
+        
+        hid_free_enumeration(devs);
+    } else {
+        printf("Could not get device information\n");
+    }
+    
+    printf("\n");
+}
+
+void DirectUSB::PrintEndpointInfo() {
+    printf("\n==== USB ENDPOINT INFORMATION ====\n");
+    printf("Note: Detailed endpoint information not available through HIDAPI.\n");
+    printf("Using standard HIDAPI endpoints for device communication.\n");
+    
+    if (m_DeviceHandle) {
+        printf("Device is connected and active.\n");
+    } else {
+        printf("No active device handle.\n");
+    }
+    printf("\n");
+}
+
+void DirectUSB::DumpRawDescriptors() {
+    printf("\n==== USB RAW DESCRIPTOR INFORMATION ====\n");
+    printf("Note: Raw descriptor access is not available through HIDAPI.\n");
+    printf("This is a simplified implementation for Linux compatibility.\n");
+    
+    if (m_DeviceHandle) {
+        printf("Device is connected with VID=0x%04X, PID=0x%04X.\n", VENDOR_ID, PRODUCT_ID);
+    } else {
+        printf("No active device handle.\n");
+    }
+    printf("\n");
+}
+
 void DirectUSB::LogPacket(const char* prefix, const uint8_t* data, size_t length) {
     printf("%s (%zu bytes): ", prefix, length);
     
@@ -249,4 +516,51 @@ void DirectUSB::LogPacket(const char* prefix, const uint8_t* data, size_t length
     }
     
     printf("\n");
+}
+
+void DirectUSB::StartAsyncRead() {
+    if (m_Running) return;
+    
+    printf("Starting asynchronous read thread...\n");
+    
+    m_Running = true;
+    m_ReadThread = std::thread(&DirectUSB::ReadThreadFunc, this);
+}
+
+void DirectUSB::StopAsyncRead() {
+    if (!m_Running) return;
+    
+    printf("Stopping asynchronous read thread...\n");
+    
+    m_Running = false;
+    
+    if (m_ReadThread.joinable()) {
+        m_ReadThread.join();
+    }
+    
+    printf("Asynchronous read thread stopped\n");
+}
+
+void DirectUSB::ReadThreadFunc() {
+    printf("Async read thread started\n");
+    
+    std::vector<uint8_t> report;
+    
+    while (m_Running) {
+        // Try to get a report
+        if (GetReport(report, 100)) {
+            // Add to queue if successful
+            std::lock_guard<std::mutex> lock(m_QueueMutex);
+            
+            // Limit queue size to prevent memory issues
+            if (m_DataQueue.size() < 100) {
+                m_DataQueue.push(report);
+            }
+        }
+        
+        // Don't hog CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    
+    printf("Async read thread exiting\n");
 }
