@@ -185,7 +185,7 @@ void DirectUSB::ReadThreadFunc() {
 // The code below represents the Linux implementation which will be added
 // to the Linux build file. It's commented out here for Windows compilation.
 
-/*
+
 // Linux implementation - will be uncommented in the Linux build
 
 #include <hidapi/hidapi.h>
