@@ -1,8 +1,6 @@
 ﻿// Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
-#include "stdafx.h"
-
 #include "HidMgr.h"
 #include "TrimReader.h"
 
@@ -310,12 +308,12 @@ bool FindTheHID()
 					{
 						//						DisplayData("");
 						//						DisplayData("*************************");
-						//						DisplayData("The device is a system " + UsageDescription + ".");
-						//						DisplayData("Windows 2000 and Windows XP don't allow applications");
-						//						DisplayData("to directly request Input reports from or "); 
-						//						DisplayData("write Output reports to these devices.");
-						//						DisplayData("*************************");
-						//						DisplayData("");
+						//					 DisplayData("The device is a system " + UsageDescription + ".");
+						//					 DisplayData("Windows 2000 and Windows XP don't allow applications");
+						//					 DisplayData("to directly request Input reports from or "); 
+						//					 DisplayData("write Output reports to these devices.");
+						//					 DisplayData("*************************");
+						//					 DisplayData("");
 					}
 
 					// Get a handle for writing Output reports.

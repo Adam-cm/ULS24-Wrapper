@@ -1,9 +1,6 @@
 // Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
-#include "stdafx.h"
-
-
 #include "InterfaceObj.h"
 #include "HidMgr.h"
 
