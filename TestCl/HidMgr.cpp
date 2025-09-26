@@ -1,534 +1,845 @@
-// Copyright 2023, All rights reserved
+﻿// Copyright 2014-2017, Anitoa Systems, LLC
+// All rights reserved
 
-#include <hidapi/hidapi.h>
-#include <cstdio>
-#include <cstring>
-#include <thread>
-#include <queue>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
-#include <vector>
-#include <array>
-
-// Linux-specific headers - must be included outside of functions
-#ifndef _WIN32
-#include <pthread.h>
-#include <sched.h>
-#include <unistd.h>
-#include <sys/resource.h>
-#include <sys/mman.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <linux/hidraw.h>
-#else
-#include <windows.h>
-#endif
+#include "stdafx.h"
 
 #include "HidMgr.h"
+#include "TrimReader.h"
 
-// Global variables
-bool g_DeviceDetected = false;
-int Continue_Flag = 0;
-bool ee_continue = false;
-int chan_num = 1;  // Default to channel 1
+//Application global variables 
 
-hid_device* DeviceHandle = nullptr;
+DWORD								ActualBytesRead;
+DWORD								BytesRead;
+HIDP_CAPS							Capabilities;
+DWORD								cbBytesRead;
+PSP_DEVICE_INTERFACE_DETAIL_DATA	detailData;
+HANDLE								DeviceHandle;
+DWORD								dwError;
+char								FeatureReport[256];
+HANDLE								hEventObject;
+HANDLE								hDevInfo;
+GUID								HidGuid;
+OVERLAPPED							HIDOverlapped;
+char								InputReport[HIDREPORTNUM];
+ULONG								Length;
+LPOVERLAPPED						lpOverLap;
+bool								MyDeviceDetected = FALSE;
+CString								MyDevicePathName;
+DWORD								NumberOfBytesRead;
+char								OutputReport[HIDREPORTNUM];
+HANDLE								ReadHandle;
+DWORD								ReportType;
+ULONG								Required;
+CString								ValueToDisplay;
+HANDLE								WriteHandle;
 
-// Communication buffers
-uint8_t RxData[RxNum] = { 0 };
-uint8_t TxData[TxNum] = { 0 };
+extern HWND							hWnd;
 
-// Windows-specific globals
-#ifdef _WIN32
-HANDLE ReadHandle = INVALID_HANDLE_VALUE;
-HANDLE hEventObject = NULL;
-DWORD NumberOfBytesRead = 0;
-OVERLAPPED HIDOverlapped = { 0 };
-unsigned char InputReport[HIDREPORTNUM] = { 0 };
-struct {
-    ULONG InputReportByteLength;
-} Capabilities = { 0 };
-bool MyDeviceDetected = false;
-#else
-// Non-Windows placeholders
-typedef int DWORD;
-#define WAIT_OBJECT_0 0
-#define WAIT_TIMEOUT 258
-unsigned char InputReport[HIDREPORTNUM] = { 0 };
-bool MyDeviceDetected = false;
-#endif
+//These are the vendor and product IDs to look for.
+//Uses Lakeview Research's Vendor ID.
 
-// CircularBuffer implementation
-bool CircularBuffer::push(std::vector<uint8_t>&& report) {
-    size_t next_head = (head + 1) % CIRCULAR_BUFFER_SIZE;
-    if (next_head == tail) {
-        return false; // Buffer full
-    }
-    buffer[head] = std::move(report);
-    head = next_head;
-    return true;
+// Original
+
+//int VendorID = 0x0483;
+//int ProductID = 0x5750;
+
+int VendorID = 0x0683;
+int ProductID = 0x5850;
+
+BYTE TxData[TxNum + 1];		// the buffer of sent data to HID
+BYTE RxData[RxNum + 1];		// the buffer of received data from HID
+
+BOOL g_DeviceDetected = false;
+BOOL Continue_Flag = false;
+BOOL ee_continue = true;
+
+int chan_num = 1;
+
+BOOL DeviceNameMatch(LPARAM lParam)
+{
+
+	// Compare the device path name of a device recently attached or removed 
+	// with the device path name of the device we want to communicate with.
+
+	PDEV_BROADCAST_HDR lpdb = (PDEV_BROADCAST_HDR)lParam;
+
+	//	DisplayData("MyDevicePathName = " + MyDevicePathName);
+
+	if (lpdb->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+	{
+
+		PDEV_BROADCAST_DEVICEINTERFACE lpdbi = (PDEV_BROADCAST_DEVICEINTERFACE)lParam;
+
+
+		CString DeviceNameString;
+
+		//The dbch_devicetype parameter indicates that the event applies to a device interface.
+		//So the structure in LParam is actually a DEV_BROADCAST_INTERFACE structure, 
+		//which begins with a DEV_BROADCAST_HDR.
+
+		//The dbcc_name parameter of DevBroadcastDeviceInterface contains the device name. 
+
+		//Compare the name of the newly attached device with the name of the device 
+		//the application is accessing (myDevicePathName).
+
+		DeviceNameString = lpdbi->dbcc_name;
+
+		//		DisplayData("DeviceNameString = " + DeviceNameString);
+
+
+		if ((DeviceNameString.CompareNoCase(MyDevicePathName)) == 0)
+
+		{
+			//The name matches.
+
+			return true;
+		}
+		else
+		{
+			//It's a different device.
+
+			return false;
+		}
+
+	}
+	else
+	{
+		return false;
+	}
 }
 
-bool CircularBuffer::pop(std::vector<uint8_t>& report) {
-    if (head == tail) {
-        return false; // Buffer empty
-    }
-    report = std::move(buffer[tail]);
-    tail = (tail + 1) % CIRCULAR_BUFFER_SIZE;
-    return true;
+bool FindTheHID()
+{
+	//Use a series of API calls to find a HID with a specified Vendor IF and Product ID.
+
+	HIDD_ATTRIBUTES						Attributes;
+	DWORD								DeviceUsage;
+	SP_DEVICE_INTERFACE_DATA			devInfoData;
+	bool								LastDevice = FALSE;
+	int									MemberIndex = 0;
+	LONG								Result;
+	CString								UsageDescription;
+
+	Length = 0;
+	detailData = NULL;
+	DeviceHandle = NULL;
+
+	/*
+	API function: HidD_GetHidGuid
+	Get the GUID for all system HIDs.
+	Returns: the GUID in HidGuid.
+	*/
+
+	HidD_GetHidGuid(&HidGuid);
+
+	/*
+	API function: SetupDiGetClassDevs
+	Returns: a handle to a device information set for all installed devices.
+	Requires: the GUID returned by GetHidGuid.
+	*/
+
+	hDevInfo = SetupDiGetClassDevs
+	(&HidGuid,
+		NULL,
+		NULL,
+		DIGCF_PRESENT | DIGCF_INTERFACEDEVICE);
+
+	devInfoData.cbSize = sizeof(devInfoData);
+
+	//Step through the available devices looking for the one we want. 
+	//Quit on detecting the desired device or checking all available devices without success.
+
+	MemberIndex = 0;
+	LastDevice = FALSE;
+
+	do
+	{
+		/*
+		API function: SetupDiEnumDeviceInterfaces
+		On return, MyDeviceInterfaceData contains the handle to a
+		SP_DEVICE_INTERFACE_DATA structure for a detected device.
+		Requires:
+		The DeviceInfoSet returned in SetupDiGetClassDevs.
+		The HidGuid returned in GetHidGuid.
+		An index to specify a device.
+		*/
+
+		Result = SetupDiEnumDeviceInterfaces
+		(hDevInfo,
+			0,
+			&HidGuid,
+			MemberIndex,
+			&devInfoData);
+
+		if (Result != 0)
+		{
+			//A device has been detected, so get more information about it.
+
+			/*
+			API function: SetupDiGetDeviceInterfaceDetail
+			Returns: an SP_DEVICE_INTERFACE_DETAIL_DATA structure
+			containing information about a device.
+			To retrieve the information, call this function twice.
+			The first time returns the size of the structure in Length.
+			The second time returns a pointer to the data in DeviceInfoSet.
+			Requires:
+			A DeviceInfoSet returned by SetupDiGetClassDevs
+			The SP_DEVICE_INTERFACE_DATA structure returned by SetupDiEnumDeviceInterfaces.
+
+			The final parameter is an optional pointer to an SP_DEV_INFO_DATA structure.
+			This application doesn't retrieve or use the structure.
+			If retrieving the structure, set
+			MyDeviceInfoData.cbSize = length of MyDeviceInfoData.
+			and pass the structure's address.
+			*/
+
+			//Get the Length value.
+			//The call will return with a "buffer too small" error which can be ignored.
+
+			Result = SetupDiGetDeviceInterfaceDetail
+			(hDevInfo,
+				&devInfoData,
+				NULL,
+				0,
+				&Length,
+				NULL);
+
+			//Allocate memory for the hDevInfo structure, using the returned Length.
+
+			detailData = (PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(Length);
+
+			//Set cbSize in the detailData structure.
+
+			detailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
+
+			//Call the function again, this time passing it the returned buffer size.
+
+			Result = SetupDiGetDeviceInterfaceDetail
+			(hDevInfo,
+				&devInfoData,
+				detailData,
+				Length,
+				&Required,
+				NULL);
+
+			// Open a handle to the device.
+			// To enable retrieving information about a system mouse or keyboard,
+			// don't request Read or Write access for this handle.
+
+			/*
+			API function: CreateFile
+			Returns: a handle that enables reading and writing to the device.
+			Requires:
+			The DevicePath in the detailData structure
+			returned by SetupDiGetDeviceInterfaceDetail.
+			*/
+
+			DeviceHandle = CreateFile
+			(detailData->DevicePath,
+				0,
+				FILE_SHARE_READ | FILE_SHARE_WRITE,
+				(LPSECURITY_ATTRIBUTES)NULL,
+				OPEN_EXISTING,
+				0,
+				NULL);
+
+			//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+			HidD_SetNumInputBuffers(DeviceHandle, HIDBUFSIZE);
+			//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//			DisplayLastError("CreateFile: ");
+
+			/*
+			API function: HidD_GetAttributes
+			Requests information from the device.
+			Requires: the handle returned by CreateFile.
+			Returns: a HIDD_ATTRIBUTES structure containing
+			the Vendor ID, Product ID, and Product Version Number.
+			Use this information to decide if the detected device is
+			the one we're looking for.
+			*/
+
+			//Set the Size to the number of bytes in the structure.
+
+			Attributes.Size = sizeof(Attributes);
+
+			Result = HidD_GetAttributes
+			(DeviceHandle,
+				&Attributes);
+
+			//			DisplayLastError("HidD_GetAttributes: ");
+
+						//Is it the desired device?
+
+			MyDeviceDetected = FALSE;
+
+
+			if (Attributes.VendorID == VendorID)
+			{
+				if (Attributes.ProductID == ProductID)
+				{
+					//Both the Vendor ID and Product ID match.
+
+					MyDeviceDetected = TRUE;
+					MyDevicePathName = detailData->DevicePath;
+					//					DisplayData("Device detected");
+
+										//Register to receive device notifications.
+
+					RegisterForDeviceNotifications();
+
+					//Get the device's capablities.
+
+					GetDeviceCapabilities();
+
+					// Find out if the device is a system mouse or keyboard.
+
+					DeviceUsage = (Capabilities.UsagePage * 256) + Capabilities.Usage;
+
+					if (DeviceUsage == 0x102)
+					{
+						UsageDescription = "mouse";
+					}
+
+					if (DeviceUsage == 0x106)
+					{
+						UsageDescription = "keyboard";
+					}
+
+					if ((DeviceUsage == 0x102) | (DeviceUsage == 0x106))
+					{
+						//						DisplayData("");
+						//						DisplayData("*************************");
+						//						DisplayData("The device is a system " + UsageDescription + ".");
+						//						DisplayData("Windows 2000 and Windows XP don't allow applications");
+						//						DisplayData("to directly request Input reports from or "); 
+						//						DisplayData("write Output reports to these devices.");
+						//						DisplayData("*************************");
+						//						DisplayData("");
+					}
+
+					// Get a handle for writing Output reports.
+
+					WriteHandle = CreateFile
+					(detailData->DevicePath,
+						GENERIC_WRITE,
+						FILE_SHARE_READ | FILE_SHARE_WRITE,
+						(LPSECURITY_ATTRIBUTES)NULL,
+						OPEN_EXISTING,
+						0,
+						NULL);
+
+					//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+					HidD_SetNumInputBuffers(WriteHandle, HIDBUFSIZE);
+					//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//					DisplayLastError("CreateFile: ");
+
+					// Prepare to read reports using Overlapped I/O.
+
+					PrepareForOverlappedTransfer();
+
+					// Set HID driver input buffer
+//					HidD_SetNumInputBuffers(DeviceHandle,64);
+
+				} //if (Attributes.ProductID == ProductID)
+
+				else
+					//The Product ID doesn't match.
+
+					CloseHandle(DeviceHandle);
+
+			} //if (Attributes.VendorID == VendorID)
+
+			else
+				//The Vendor ID doesn't match.
+
+				CloseHandle(DeviceHandle);
+
+			//Free the memory used by the detailData structure (no longer needed).
+
+			free(detailData);
+
+		}  //if (Result != 0)
+
+		else
+			//SetupDiEnumDeviceInterfaces returned 0, so there are no more devices to check.
+
+			LastDevice = TRUE;
+
+		//If we haven't found the device yet, and haven't tried every available device,
+		//try the next one.
+
+		MemberIndex = MemberIndex + 1;
+
+	} //do
+
+	while ((LastDevice == FALSE) && (MyDeviceDetected == FALSE));
+
+	if (MyDeviceDetected == FALSE) {
+		//		DisplayData("Device not detected");
+		//		SetDlgItemText(IDC_STATICOpenComm,"Device Not Detected");
+		g_DeviceDetected = false;
+	}
+	else {
+		//		DisplayData("Device detected");
+		//		SetDlgItemText(IDC_STATICOpenComm,"ULS24 Device Detected");
+		g_DeviceDetected = true;
+	}
+
+	//Free the memory reserved for hDevInfo by SetupDiClassDevs.
+
+	SetupDiDestroyDeviceInfoList(hDevInfo);
+	//	DisplayLastError("SetupDiDestroyDeviceInfoList");
+
+		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	HidD_SetNumInputBuffers(DeviceHandle, HIDBUFSIZE);
+	HidD_SetNumInputBuffers(WriteHandle, HIDBUFSIZE);
+	HidD_SetNumInputBuffers(ReadHandle, HIDBUFSIZE);
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	return MyDeviceDetected;
 }
 
-bool CircularBuffer::empty() const {
-    return head == tail;
+void CloseHandles()
+{
+	//Close open handles.
+
+	if (DeviceHandle != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(DeviceHandle);
+	}
+
+	if (ReadHandle != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(ReadHandle);
+	}
+
+	if (WriteHandle != INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(WriteHandle);
+	}
 }
 
-size_t CircularBuffer::size() const {
-    return (head >= tail) ? (head - tail) : (CIRCULAR_BUFFER_SIZE - tail + head);
+void DisplayInputReport()
+{
+	USHORT	ByteNumber;
+	CHAR	ReceivedByte;
+
+	//Display the received data in the log and the Bytes Received List boxes.
+	//Start at the top of the List Box.
+
+//	m_BytesReceived.ResetContent();
+
+	//Step through the received bytes and display each.
+
+	for (ByteNumber = 0; ByteNumber < Capabilities.InputReportByteLength; ByteNumber++)
+	{
+		//Get a byte.
+
+		ReceivedByte = InputReport[ByteNumber];
+
+		//Display it.
+
+		DisplayReceivedData(ReceivedByte);
+	}
 }
 
-// Buffer and synchronization objects
-static CircularBuffer hid_report_buffer;
-static std::mutex hid_buffer_mutex;
-static std::condition_variable hid_buffer_cv;
-static std::atomic<bool> hid_read_thread_running{ false };
-static std::thread hid_read_thread;
+void DisplayReceivedData(char ReceivedByte)
+{
+	/*
+		//Display data received from the device.
 
-// Thread function for continuous HID reading
-static void HidReadThreadFunc() {
-    // Pre-allocate vector to avoid allocation during read
-    std::vector<uint8_t> report(RxNum);
-    unsigned char InputReport[HIDREPORTNUM];
+		CString	strByteRead;
 
-#ifdef __linux__
-    // Set real-time priority for this thread
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) == 0) {
-        printf("HID thread using real-time scheduling\n");
-    }
+		//Convert the value to a 2-character Cstring.
 
-    // Increase read aggressiveness on Linux
-    int missed = 0;
-    const int max_consec_missed = 3;
-#endif
+		strByteRead.Format("%02X", ReceivedByte);
+		strByteRead = strByteRead.Right(2);
 
-    while (hid_read_thread_running) {
-        // Use minimal timeout for maximum throughput
-        int res = hid_read_timeout(DeviceHandle, InputReport, HIDREPORTNUM, 0);
-        if (res > 0) {
-            // Got data - process it
-            report.assign(InputReport + 1, InputReport + 1 + RxNum);
+		//Display the value in the Bytes Received List Box.
 
-            // Store in buffer with minimal lock time
-            {
-                std::lock_guard<std::mutex> lock(hid_buffer_mutex);
-                if (!hid_report_buffer.push(std::move(report))) {
-                    fprintf(stderr, "Warning: HID buffer overflow!\n");
-                }
-                report = std::vector<uint8_t>(RxNum); // New buffer after move
-            }
-            hid_buffer_cv.notify_one();
+		m_BytesReceived.InsertString(-1, strByteRead);
 
-#ifdef __linux__
-            missed = 0; // Reset missed counter when we get data
-#endif
-        }
-        else {
-#ifdef __linux__
-            // On Linux, adjust sleep based on whether we're getting data
-            if (++missed > max_consec_missed) {
-                // Only sleep if we've had several empty reads in a row
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
-                missed = max_consec_missed;
-            }
-#else
-            // On other platforms, use a fixed sleep
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
-#endif
-        }
-    }
+		//Display the value in the log List Box (optional).
+		//MessageToDisplay.Format("%s%s", "Byte 0: ", strByteRead);
+		//DisplayData(MessageToDisplay);
+		//UpdateData(false);
+	*/
 }
 
-// Start the read thread
-void StartHidReadThread() {
-    if (!hid_read_thread_running) {
-        // On Pi, increase the non-blocking poll rate
-        hid_set_nonblocking(DeviceHandle, 1);
+void GetDeviceCapabilities()
+{
+	//Get the Capabilities structure for the device.
 
-        // Start the read thread
-        hid_read_thread_running = true;
-        hid_read_thread = std::thread(HidReadThreadFunc);
-    }
+	PHIDP_PREPARSED_DATA	PreparsedData;
+
+	/*
+	API function: HidD_GetPreparsedData
+	Returns: a pointer to a buffer containing the information about the device's capabilities.
+	Requires: A handle returned by CreateFile.
+	There's no need to access the buffer directly,
+	but HidP_GetCaps and other API functions require a pointer to the buffer.
+	*/
+
+	HidD_GetPreparsedData
+	(DeviceHandle,
+		&PreparsedData);
+	//	DisplayLastError("HidD_GetPreparsedData: ");
+
+		/*
+		API function: HidP_GetCaps
+		Learn the device's capabilities.
+		For standard devices such as joysticks, you can find out the specific
+		capabilities of the device.
+		For a custom device, the software will probably know what the device is capable of,
+		and the call only verifies the information.
+		Requires: the pointer to the buffer returned by HidD_GetPreparsedData.
+		Returns: a Capabilities structure containing the information.
+		*/
+
+	HidP_GetCaps
+	(PreparsedData,
+		&Capabilities);
+	//	DisplayLastError("HidP_GetCaps: ");
+
+		//Display the capabilities
+	/*
+		ValueToDisplay.Format("%s%X", "Usage Page: ", Capabilities.UsagePage);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Input Report Byte Length: ", Capabilities.InputReportByteLength);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Output Report Byte Length: ", Capabilities.OutputReportByteLength);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Feature Report Byte Length: ", Capabilities.FeatureReportByteLength);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Link Collection Nodes: ", Capabilities.NumberLinkCollectionNodes);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Input Button Caps: ", Capabilities.NumberInputButtonCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of InputValue Caps: ", Capabilities.NumberInputValueCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of InputData Indices: ", Capabilities.NumberInputDataIndices);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Output Button Caps: ", Capabilities.NumberOutputButtonCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Output Value Caps: ", Capabilities.NumberOutputValueCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Output Data Indices: ", Capabilities.NumberOutputDataIndices);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Feature Button Caps: ", Capabilities.NumberFeatureButtonCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Feature Value Caps: ", Capabilities.NumberFeatureValueCaps);
+	//	DisplayData(ValueToDisplay);
+		ValueToDisplay.Format("%s%d", "Number of Feature Data Indices: ", Capabilities.NumberFeatureDataIndices);
+	///	DisplayData(ValueToDisplay);
+	*/
+	//No need for PreparsedData any more, so free the memory it's using.
+
+	HidD_FreePreparsedData(PreparsedData);
+	//	DisplayLastError("HidD_FreePreparsedData: ") ;
 }
 
-// Stop the read thread and join
-void StopHidReadThread() {
-    if (hid_read_thread_running) {
-        hid_read_thread_running = false;
-        if (hid_read_thread.joinable())
-            hid_read_thread.join();
-    }
+void PrepareForOverlappedTransfer()
+{
+	//Get a handle to the device for the overlapped ReadFiles.
+
+	ReadHandle = CreateFile
+	(detailData->DevicePath,
+		GENERIC_READ,
+		FILE_SHARE_READ | FILE_SHARE_WRITE,
+		(LPSECURITY_ATTRIBUTES)NULL,
+		OPEN_EXISTING,
+		FILE_FLAG_OVERLAPPED,
+		NULL);
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	HidD_SetNumInputBuffers(ReadHandle, HIDBUFSIZE);
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//	DisplayLastError("CreateFile (ReadHandle): ");
+
+	//Get an event object for the overlapped structure.
+
+	/*API function: CreateEvent
+	Requires:
+	  Security attributes or Null
+	  Manual reset (true). Use ResetEvent to set the event object's state to non-signaled.
+	  Initial state (true = signaled)
+	  Event object name (optional)
+	Returns: a handle to the event object
+	*/
+
+	if (hEventObject == 0)
+	{
+		hEventObject = CreateEvent
+		(NULL,
+			TRUE,
+			TRUE,
+			CString(""));
+
+		//	DisplayLastError("CreateEvent: ") ;
+
+			//Set the members of the overlapped structure.
+
+		HIDOverlapped.hEvent = hEventObject;
+		HIDOverlapped.Offset = 0;
+		HIDOverlapped.OffsetHigh = 0;
+	}
 }
 
-// Get current buffer size
-size_t GetBufferSize() {
-    std::lock_guard<std::mutex> lock(hid_buffer_mutex);
-    return hid_report_buffer.size();
+void ReadAndWriteToDevice()
+{
+	//If necessary, find the device and learn its capabilities.
+	//Then send a report and request a report.
+
+	//Clear the List Box (optional).
+	//m_ResultsList.ResetContent();
+
+//	DisplayData("***HID Test Report***");
+//	DisplayCurrentTime();
+
+	//If the device hasn't been detected already, look for it.
+
+	if (MyDeviceDetected == FALSE)
+	{
+		MyDeviceDetected = FindTheHID();
+	}
+
+	// Do nothing if the device isn't detected.
+
+	if (MyDeviceDetected == TRUE)
+	{
+		//Write a report to the device.
+
+		WriteHIDOutputReport();
+
+		//Active read message
+
+//		SendHIDRead();
+
+		ReadHIDInputReport();
+	}
 }
 
-// Simple flow check - for monitoring
-int check_data_flow() {
-    static int last_size = 0;
-    int current_size = 0;
+// Parsing Received USB data
 
-    {
-        std::lock_guard<std::mutex> lock(hid_buffer_mutex);
-        current_size = static_cast<int>(hid_report_buffer.size());
-    }
+void ReadHIDInputReport()
+{
 
-    int delta = current_size - last_size;
-    last_size = current_size;
+	// Retrieve an Input report from the device.
 
-    return delta;
+	DWORD	Result;
+
+	//The first byte is the report number.
+	InputReport[0] = 0;
+
+	/*API call:ReadFile
+	'Returns: the report in InputReport.
+	'Requires: a device handle returned by CreateFile
+	'(for overlapped I/O, CreateFile must be called with FILE_FLAG_OVERLAPPED),
+	'the Input report length in bytes returned by HidP_GetCaps,
+	'and an overlapped structure whose hEvent member is set to an event object.
+	*/
+
+	if (ReadHandle != INVALID_HANDLE_VALUE)
+	{
+		Result = ReadFile
+		(ReadHandle,
+			InputReport,
+			Capabilities.InputReportByteLength,
+			&NumberOfBytesRead,
+			(LPOVERLAPPED)&HIDOverlapped
+		);
+	}
+
+	//	DisplayLastError("ReadFile: ") ;
+
+	//////////////////
+
+		/*API call:WaitForSingleObject
+		'Used with overlapped ReadFile.
+		'Returns when ReadFile has received the requested amount of data or on timeout.
+		'Requires an event object created with CreateEvent
+		'and a timeout value in milliseconds.
+		*/
+
+	Result = WaitForSingleObject
+	(hEventObject,
+		264000);	// timer out timer for USB packet, must be longer than longest int time -Zhimin Ding
+
+	long k;
+	BYTE rCmd;	//
+	BYTE rType;	//
+
+	switch (Result)
+	{
+	case WAIT_OBJECT_0:
+	{
+		//
+		for (k = 0; k < HIDREPORTNUM - 1; k++)
+			RxData[k] = InputReport[k + 1];	//
+
+		rCmd = RxData[2];	//
+		rType = RxData[4];	//
+
+		switch (rCmd)
+		{
+		case GetCmd:
+		{
+			if ((rType == 0x01) | (rType == 0x02) | (rType == 0x12) | (rType == 0x22) | (rType == 0x32) | (rType == 0x03))		//
+			{
+
+				chan_num = (rType & 0xF0) / 16 + 1;
+
+				//=================F1 Code detection
+
+				if ((RxData[5] == 0x0b) || (RxData[5] == 0xf1))		//
+				{
+					Continue_Flag = false;
+					if (RxData[5] == 0xf1)
+					{
+						//										MessageBox("Error code 0xF1.  Sensor communication time out.", "TestBB", MB_ICONWARNING);
+						return;
+					}
+				}
+
+				//==================	
+				//							if (RxData[5]==0x0b)		// HID读到第12行后停止读取
+				//								Gra_pageFlag = false;
+				else
+					Continue_Flag = true;
+			}
+			else
+			{
+				if ((rType == 0x07) | (rType == 0x08) | (rType == 0x0b))	//返回24 pixel 数据时
+				{
+					if (RxData[5] == 0x17)	// HID读到第24行后停止读取
+						Continue_Flag = false;
+					else
+						Continue_Flag = true;
+				}
+			}
+
+			//						m_GraDlg.SendMessage(UM_GRAPROCESS);				
+			break;
+		}
+		}
+		break;
+	}
+	case WAIT_TIMEOUT:
+	{
+		//		SetDlgItemText(IDC_STATICOpenComm, "ReadFile timeout");
+
+				/*API call: CancelIo
+				Cancels the ReadFile
+				Requires the device handle.
+				Returns non-zero on success.
+				*/
+
+		Result = CancelIo(ReadHandle);
+
+		//A timeout may mean that the device has been removed. 
+		//Close the device handles and set MyDeviceDetected = False 
+		//so the next access attempt will search for the device.
+		CloseHandles();
+		MyDeviceDetected = FALSE;
+		break;
+	}
+	default:
+	{
+		//Close the device handles and set MyDeviceDetected = False 
+		//so the next access attempt will search for the device.
+
+		CloseHandles();
+		//		SetDlgItemText(IDC_STATICOpenComm,"Can't read from device");
+		MyDeviceDetected = FALSE;
+		break;
+	}
+	}
+
+	/*
+	API call: ResetEvent
+	Sets the event object to non-signaled.
+	Requires a handle to the event object.
+	Returns non-zero on success.
+	*/
+
+	ResetEvent(hEventObject);
+
+	//Display the report data.
+
+	DisplayInputReport();
+
 }
 
-// Retrieve the next HID report (blocks until available)
-bool GetNextHidReport(std::vector<uint8_t>& report) {
-    std::unique_lock<std::mutex> lock(hid_buffer_mutex);
-    hid_buffer_cv.wait(lock, [] {
-        return !hid_report_buffer.empty() || !hid_read_thread_running;
-        });
+void RegisterForDeviceNotifications()
+{
 
-    if (!hid_report_buffer.empty()) {
-        hid_report_buffer.pop(report);
-        return true;
-    }
-    return false;
+	// Request to receive messages when a device is attached or removed.
+	// Also see WM_DEVICECHANGE in BEGIN_MESSAGE_MAP(CPCRProjectDlg, CDialog).
+
+	DEV_BROADCAST_DEVICEINTERFACE DevBroadcastDeviceInterface;
+	HDEVNOTIFY DeviceNotificationHandle;
+
+	DevBroadcastDeviceInterface.dbcc_size = sizeof(DevBroadcastDeviceInterface);
+	DevBroadcastDeviceInterface.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+	DevBroadcastDeviceInterface.dbcc_classguid = HidGuid;
+
+	//	DeviceNotificationHandle =
+	//		RegisterDeviceNotification(hWnd, &DevBroadcastDeviceInterface, DEVICE_NOTIFY_WINDOW_HANDLE);
+
 }
 
-// Find and open the HID device
-bool FindTheHID() {
-    if (hid_init() != 0) {
-        std::printf("hidapi init failed\n");
-        return false;
-    }
+void WriteHIDOutputReport()
+{
+	//Send a report to the device.
 
-    DeviceHandle = hid_open(VENDOR_ID, PRODUCT_ID, nullptr);
+	DWORD	BytesWritten = 0;
+	INT		Index = 0;
+	ULONG	Result;
+	CString	strBytesWritten = CString("");
 
-    if (DeviceHandle) {
-        std::printf("Device found!\n");
+	//	UpdateData(true);
 
-#ifdef __linux__
-        // HIDAPI doesn't expose buffer size control directly
-        // Instead, modify our internal buffer and read strategy
+		//The first byte is the report number.
 
-        // 1. Increase our internal circular buffer size
-        std::printf("Using %d-entry circular buffer (%d KB)\n",
-            CIRCULAR_BUFFER_SIZE,
-            (CIRCULAR_BUFFER_SIZE * RxNum) / 1024);
+	OutputReport[0] = 0;
 
-        // 2. Find the hidraw path for diagnostics
-        struct hid_device_info* devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
-        if (devs) {
-            std::string path = devs->path;
-            hid_free_enumeration(devs);
+	for (int i = 1; i < TxNum + 1; i++)
+		OutputReport[i] = TxData[i - 1];
 
-            std::printf("Device path: %s\n", path.c_str());
+	/*
+		API Function: WriteFile
+		Sends a report to the device.
+		Returns: success or failure.
+		Requires:
+		A device handle returned by CreateFile.
+		A buffer that holds the report.
+		The Output Report length returned by HidP_GetCaps,
+		A variable to hold the number of bytes written.
+	*/
 
-            // Extract hidraw device name
-            size_t pos = path.rfind('/');
-            if (pos != std::string::npos) {
-                std::string hidraw = path.substr(pos + 1);
-                std::printf("HID device: %s\n", hidraw.c_str());
+	if (WriteHandle != INVALID_HANDLE_VALUE)
+	{
+		Result = WriteFile
+		(WriteHandle,
+			OutputReport,
+			Capabilities.OutputReportByteLength,
+			&BytesWritten,
+			NULL);
+	}
 
-                // Print diagnostic info about the device
-                std::printf("For maximum performance, you can create a udev rule:\n");
-                std::printf("echo 'KERNEL==\"%s\", ATTR{power/control}=\"on\", "
-                    "ATTR{device/power/wakeup}=\"enabled\"' > "
-                    "/etc/udev/rules.d/99-hidraw-performance.rules\n",
-                    hidraw.c_str());
-            }
-        }
-#endif
+	//Display the result of the API call and the report bytes.
 
-        // Set non-blocking mode for maximum throughput
-        hid_set_nonblocking(DeviceHandle, 1);
+	if (!Result)
+	{
+		//The WriteFile failed, so close the handles, display a message,
+		//and set MyDeviceDetected to FALSE so the next attempt will look for the device.
 
-        // Start the read thread
-        StartHidReadThread();
-        g_DeviceDetected = true;
-        return true;
-    }
-    else {
-        std::printf("Device not found.\n");
-        g_DeviceDetected = false;
-        return false;
-    }
-}
+		CloseHandles();
+		//			SetDlgItemText(IDC_STATICOpenComm,"Can't write to device");
+		MyDeviceDetected = FALSE;
+	}
 
-// Close the HID device and stop thread
-void CloseHandles() {
-    StopHidReadThread();
-    if (DeviceHandle) {
-        hid_close(DeviceHandle);
-        DeviceHandle = nullptr;
-    }
-    hid_exit();
-    g_DeviceDetected = false;
-}
-
-// Add this helper function to print hex data
-void PrintHexData(const char* prefix, const uint8_t* data, int length) {
-    printf("%s: ", prefix);
-    for (int i = 0; i < length; i++) {
-        printf("%02X ", data[i]);
-        // Add a newline every 16 bytes for readability
-        if ((i + 1) % 16 == 0 && i < length - 1) {
-            printf("\n     ");
-        }
-    }
-    printf("\n");
-}
-
-// Enhanced version with debug output for transmitted data
-bool WriteHIDOutputReport(int length) {
-    if (!DeviceHandle) return false;
-
-    // Increase buffer size to HIDREPORTNUM (65 bytes)
-    unsigned char OutputReport[HIDREPORTNUM] = { 0 };
-    OutputReport[0] = 0; // Report ID
-
-    // Make sure we don't overflow the buffer
-    std::memcpy(&OutputReport[1], TxData, std::min(static_cast<size_t>(TxNum),
-        static_cast<size_t>(HIDREPORTNUM - 1)));
-
-    // Print the actual data being sent
-    printf("\n==== TRANSMITTING DATA PACKET ====\n");
-    PrintHexData("TX RAW", OutputReport, length);
-    printf("TX Command: 0x%02X\n", TxData[1]);
-    printf("TX Data Length: 0x%02X\n", TxData[2]);
-    printf("TX Packet Type: 0x%02X\n", TxData[3]);
-    if (length > 4) {
-        printf("TX Data: ");
-        for (int i = 4; i < std::min(15, length); i++) {
-            printf("0x%02X ", TxData[i]);
-        }
-        printf("\n");
-    }
-    printf("==== END TX PACKET ====\n\n");
-
-    // Try multiple times in case of transient errors
-    int max_retries = 3;
-    int res = -1;
-
-    for (int retry = 0; retry < max_retries; retry++) {
-        res = hid_write(DeviceHandle, OutputReport, length);
-
-        if (res >= 0) {
-            // Success
-            printf("TX SUCCESS: Wrote %d bytes\n", res);
-            break;
-        }
-
-        printf("Write failed (attempt %d/%d) with error: %d - %ls\n",
-            retry + 1, max_retries, res, hid_error(DeviceHandle));
-
-        if (retry < max_retries - 1) {
-            // Wait before retry
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-
-    // Add a small delay after sending to allow device to process
-    std::this_thread::sleep_for(std::chrono::milliseconds(15));
-
-    return (res >= 0);
-}
-
-// Enhanced version with debug output for received data
-bool ReadHIDInputReportTimeout(int length, int timeout_ms) {
-    if (!DeviceHandle) return false;
-
-    // Increase buffer size to HIDREPORTNUM (65 bytes)
-    unsigned char InputReport[HIDREPORTNUM] = { 0 };
-
-    // Start timing
-    auto start_time = std::chrono::steady_clock::now();
-    int total_time_ms = 0;
-    int result = 0;
-
-    // Loop with short timeouts to be more responsive
-    while (total_time_ms < timeout_ms) {
-        // Use shorter incremental timeouts for more responsive behavior
-        int this_timeout = std::min(50, timeout_ms - total_time_ms);
-
-        result = hid_read_timeout(DeviceHandle, InputReport, length, this_timeout);
-
-        if (result > 0) {
-            // Success - copy data with bounds checking
-            std::memcpy(RxData, &InputReport[1], std::min(static_cast<size_t>(RxNum),
-                static_cast<size_t>(HIDREPORTNUM - 1)));
-
-            // Print the complete received data
-            printf("\n==== RECEIVED DATA PACKET ====\n");
-            PrintHexData("RX RAW", InputReport, result);
-            
-            // Extract and print important fields
-            uint8_t cmd = RxData[2];    // Command type
-            uint8_t type = RxData[4];   // Row type/frame format
-            uint8_t row = RxData[5];    // Row number
-
-            printf("RX Command: 0x%02X\n", cmd);
-            printf("RX Type/Row Type: 0x%02X\n", type);
-            printf("RX Row/Data: 0x%02X\n", row);
-            
-            // Print data payload based on packet format
-            if (cmd == 0x1c && type < 12) {
-                printf("RX Row %d Data: ", type);
-                // For 0x1c command, print the first few pixel values
-                for (int i = 0; i < 6; i++) {
-                    uint16_t pixel = (RxData[6 + i*2] << 8) | RxData[7 + i*2];
-                    printf("%d ", pixel);
-                }
-                printf("...\n");
-            }
-            else if (cmd == 0x02) {
-                printf("RX Legacy Format Data: ");
-                for (int i = 0; i < 6; i++) {
-                    printf("0x%02X ", RxData[6 + i]);
-                }
-                printf("...\n");
-            }
-            
-            printf("==== END RX PACKET ====\n\n");
-            
-            return true;
-        }
-        else if (result < 0) {
-            // Error occurred
-            printf("HID read error: %ls\n", hid_error(DeviceHandle));
-            return false;
-        }
-
-        // Update elapsed time
-        auto now = std::chrono::steady_clock::now();
-        total_time_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - start_time).count());
-    }
-
-    // Timeout occurred
-    return false;
-}
-
-// Enhanced ReadHIDInputReport with full data printing
-void ReadHIDInputReport() {
-#ifdef _WIN32
-    // Windows implementation - same as before
-    // ...
-#else
-    // Linux/non-Windows implementation with full data printing
-    unsigned char buffer[HIDREPORTNUM] = { 0 };
-    int res = hid_read_timeout(DeviceHandle, buffer, HIDREPORTNUM, 1000);
-
-    if (res > 0) {
-        // Copy data from buffer to RxData (skipping report ID)
-        std::memcpy(RxData, &buffer[1], std::min(static_cast<size_t>(RxNum), static_cast<size_t>(HIDREPORTNUM - 1)));
-
-        // Print the complete received data
-        printf("\n==== RECEIVED DATA PACKET (STANDARD READ) ====\n");
-        PrintHexData("RX RAW", buffer, res);
-        
-        // Extract command type and other info
-        uint8_t cmd = RxData[2];  // Command type 
-        uint8_t type = RxData[4]; // Row type
-        uint8_t row = RxData[5];  // Row number
-
-        printf("RX Command: 0x%02X\n", cmd);
-        printf("RX Type/Row Type: 0x%02X\n", type);
-        printf("RX Row/Data: 0x%02X\n", row);
-        
-        // Print data payload based on packet format
-        if (cmd == 0x1c && type < 12) {
-            printf("RX Row %d Data: ", type);
-            // For 0x1c command, print the first few pixel values
-            for (int i = 0; i < 6; i++) {
-                uint16_t pixel = (RxData[6 + i*2] << 8) | RxData[7 + i*2];
-                printf("%d ", pixel);
-            }
-            printf("...\n");
-        }
-        
-        printf("==== END RX PACKET ====\n\n");
-
-        // Original processing logic
-        printf("Received packet: cmd=0x%02x type=0x%02x row=0x%02x\n", cmd, type, row);
-
-        // Process based on command type
-        if (cmd == 0x02) {  // Frame data command
-            uint8_t frameFormat = type & 0x0F;
-
-            if (frameFormat == 0x02 || frameFormat == 0x22) {
-                // Get channel from the upper nibble of type
-                if (type & 0xF0) {
-                    chan_num = ((type & 0xF0) >> 4) + 1;
-                }
-
-                // Check for end signal
-                if (row == 0x0b || row == 0xf1) {
-                    Continue_Flag = false;
-                    printf("End signal detected: 0x%02x\n", row);
-                }
-                else {
-                    Continue_Flag = true;
-                }
-            }
-            else if (frameFormat == 0x08) {  // 24x24 frame
-                if (row == 0x17) {
-                    Continue_Flag = false;
-                }
-                else {
-                    Continue_Flag = true;
-                }
-            }
-            else {
-                printf("Warning: Unknown frame format: %02x\n", frameFormat);
-                Continue_Flag = true;  // Continue by default
-            }
-        }
-        else if (cmd == 0x1c) {  // Special frame data command used by the device
-            // For 0x1c command, the row_type is the row index (0-11)
-            int rowIndex = type & 0x0F;
-
-            if (rowIndex < 12) {
-                printf("Processing 0x1c command data for row %d\n", rowIndex);
-                Continue_Flag = true;  // Continue receiving data
-            }
-            else {
-                printf("Warning: Invalid row index in 0x1c command: %d\n", rowIndex);
-                Continue_Flag = true;  // Continue by default
-            }
-
-            // If we received the last row, consider this the end
-            if (rowIndex == 11) {
-                // Don't set Continue_Flag=false here to allow processing
-                // Let the processing code handle it
-            }
-        }
-        else if (cmd == 0x01) {
-            // Command acknowledgement
-            printf("Command acknowledgement received\n");
-        }
-        else {
-            printf("Unknown command type: 0x%02x\n", cmd);
-        }
-    }
-    else if (res < 0) {
-        printf("Error reading from device: %ls\n", hid_error(DeviceHandle));
-        CloseHandles();
-        g_DeviceDetected = false;
-        MyDeviceDetected = false;
-    }
-#endif
 }

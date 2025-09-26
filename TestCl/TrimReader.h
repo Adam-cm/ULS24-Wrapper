@@ -3,124 +3,121 @@
 
 #pragma once
 
+#ifdef _WIN32
+#include <windows.h>
+#include <tchar.h>
+#include <afx.h>
+#else
+#include <stdint.h>
+typedef uint8_t BYTE;
+typedef int BOOL;
+#define TRUE 1
+#define FALSE 0
+typedef char TCHAR;
+#endif
+
+// Forward declare CString for non-Windows
+#ifndef _WIN32
 #include <string>
-#include <fstream>
-#include <cstdint>
+typedef std::string CString;
+#endif
 
+#include <vector>
+
+#define TRIM_MAX_WORD 1024
 #define TRIM_IMAGER_SIZE 12
-#define MAX_TRIMBUFF 256
-
-#define EPKT_SZ  52
 #define NUM_EPKT 4
+#define EPKT_SZ 64
+#define MAX_TRIMBUFF 1024
 
 class CTrimNode {
 public:
-    double kb[TRIM_IMAGER_SIZE][6];
-    double fpn[2][TRIM_IMAGER_SIZE];
+	CString name;
+	double kb[TRIM_IMAGER_SIZE][6];
+	int kbi[TRIM_IMAGER_SIZE][6];
+	double fpn[2][TRIM_IMAGER_SIZE];
+	int fpni[2][TRIM_IMAGER_SIZE];
+	double tempcal[TRIM_IMAGER_SIZE];
+	BYTE rampgen;
+	BYTE range;
+	BYTE auto_v20[2];
+	BYTE auto_v15;
+	BYTE version;
+	BYTE trim_buff[MAX_TRIMBUFF];
+	int tbuff_size;
+	int tbuff_rptr;
+	int fp;
 
-    unsigned int rampgen;
-    unsigned int range;
-    unsigned int auto_v20[2];
-    unsigned int auto_v15;
-    unsigned int version;
-
-    double tempcal[TRIM_IMAGER_SIZE];
-
-    int kbi[TRIM_IMAGER_SIZE][6];
-    int fpni[2][TRIM_IMAGER_SIZE];
-
-    std::string name; // Fixed: previously missing type
-
-    uint8_t trim_buff[MAX_TRIMBUFF];
-    int tbuff_size;
-    int tbuff_rptr;
-
-    CTrimNode();
-
-private:
-    void Initialize();
+	CTrimNode();
+	void Initialize();
 };
 
-#define TRIM_MAX_NODE 4
-#define TRIM_MAX_WORD 640
-
 class CTrimReader {
-protected:
-    std::string WordBuf[TRIM_MAX_WORD];
-    int WordIndex;
-    int MaxWord;
-    std::string CurWord;
-
-    uint8_t trim_buff[1024];
-    int tbuff_size;
-    int tbuff_rptr;
-
-    uint8_t version;
-    uint8_t id;
-    std::string id_str;
-    uint8_t serial_number1, serial_number2;
-    uint8_t num_wells, num_channels, well_format, channel_format;
-    uint8_t num_pages;
-
 public:
-    CTrimNode Node[TRIM_MAX_NODE];
-    CTrimNode* curNode;
-    int NumNode;
+	CTrimReader();
+	~CTrimReader();
 
-    CTrimReader();
-    ~CTrimReader();
+	// Member variables for file parsing and trim data
+#ifdef _WIN32
+	CFile InFile;
+#else
+	// Provide a stub or file handle for non-Windows if needed
+#endif
+	CString WordBuf[TRIM_MAX_WORD];
+	CString CurWord;
+	int WordIndex;
+	int MaxWord;
+	bool fileLoaded;
 
-    int Load(const std::string& filename); // Changed from TCHAR* to std::string
-    void Parse();
-    void ParseNode();
+	CTrimNode Node[16];
+	CTrimNode* curNode;
+	int NumNode;
 
-    int GetNumNode() const { return NumNode; }
+	BYTE id;
+	BYTE version;
+	BYTE serial_number1, serial_number2;
+	BYTE num_channels, num_wells, num_pages;
+	BYTE well_format, channel_format;
+	std::vector<BYTE> id_str;
 
-    int ADCCorrection(int NumData, uint8_t HighByte, uint8_t LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag);
-    int ADCCorrectioni(int NumData, uint8_t HighByte, uint8_t LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag);
+	BYTE trim_buff[MAX_TRIMBUFF];
+	int tbuff_rptr;
 
-    void SetV20(uint8_t v20);
-    void SetGainMode(int gain);
-    void SetV15(uint8_t v15);
-    void Capture12();
-    void Capture12(uint8_t);
-    void Capture24();
-    int ProcessRowData(int (*adc_data)[24], int gain_mode);
-
-    void SetRangeTrim(uint8_t range);
-    void SetRampgen(uint8_t rampgen);
-    void SetTXbin(uint8_t txbin);
-    void SetIntTime(float);
-    void SelSensor(uint8_t i);
-    void SetIntTime(float kfl, uint8_t ch);
-    void SetLEDConfig(bool IndvEn, bool Chan1, bool Chan2, bool Chan3, bool Chan4);
-
-    void EEPROMRead();
-    void OnEEPROMRead();
-    void ReadTrimData();
-
-    uint8_t TrimBuff2Byte();
-    void CopyEepromBuffAndRestore();
-    void RestoreFromTrimBuff();
-
-    int Add2TrimBuff(int i, int);
-    int Add2TrimBuff(int i, uint8_t);
-    int WriteTrimBuff(int i);
-    int TrimBuff2Int(int i);
-    uint8_t TrimBuff2Byte(int i);
-    void RestoreTrimBuff(int k);
-    void CopyEepromBuff(int k, int index_start);
-
-    void Convert2Int(int c);
-
-protected:
-    bool fileLoaded;
-
-    void ParseMatrix();
-    void ParseArray(int);
-    void ParseValue(int);
-
-private:
-    int GetWord();
-    int Match(const std::string&);
+	int Load(TCHAR* fn);
+	int GetWord();
+	int Match(CString s);
+	void Parse();
+	void ParseNode();
+	void ParseMatrix();
+	void ParseArray(int gain);
+	void ParseValue(int gain);
+	int ADCCorrection(int NumData, BYTE HighByte, BYTE LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag);
+	int ADCCorrectioni(int NumData, BYTE HighByte, BYTE LowByte, int pixelNum, int PCRNum, int gain_mode, int* flag);
+	void SetV20(BYTE v20);
+	void SetGainMode(int gain);
+	void SetV15(BYTE v15);
+	void Capture12();
+	void Capture12(BYTE chan);
+	void Capture24();
+	void SetRangeTrim(BYTE range);
+	void SetRampgen(BYTE rampgen);
+	void SetTXbin(BYTE txbin);
+	void SetLEDConfig(BOOL IndvEn, BOOL Chan1, BOOL Chan2, BOOL Chan3, BOOL Chan4);
+	void SetIntTime(float int_t);
+	void SelSensor(BYTE i);
+	int ProcessRowData(int (*adc_data)[24], int gain_mode);
+	BYTE TrimBuff2Byte();
+	void CopyEepromBuffAndRestore();
+	void RestoreFromTrimBuff();
+	void OnEEPROMRead();
+	void EEPROMRead();
+	void ReadTrimData();
+	void Convert2Int(int c);
+	int Add2TrimBuff(int i, int val);
+	int Add2TrimBuff(int i, BYTE val);
+	int WriteTrimBuff(int k);
+	int TrimBuff2Int(int i);
+	BYTE TrimBuff2Byte(int i);
+	void RestoreTrimBuff(int k);
+	void CopyEepromBuff(int k, int index_start);
 };

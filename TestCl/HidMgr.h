@@ -1,67 +1,39 @@
+// Copyright 2014-2017, Anitoa Systems, LLC
+// All rights reserved
+
 #pragma once
 
-#include <hidapi/hidapi.h>
-#include <vector>   // Missing include for std::vector
-#include <cstdint>  // For uint8_t
+#include <wtypes.h>
+#include <initguid.h>
 
-// Constants for HID communication
-#define HIDREPORTNUM 65   // Increase to 65 to avoid buffer overflow (64 + 1 report ID)
-#define RxNum 64
-#define TxNum 64
+#define MAX_LOADSTRING 256
 
-// Device identifiers
-#define VENDOR_ID 0x0483
-#define PRODUCT_ID 0x5750
+extern "C" {
 
-// Buffer size for circular queue
-#define CIRCULAR_BUFFER_SIZE 256
+	// This file is in the Windows DDK available from Microsoft.
+#include "hidsdi.h"
 
-// Handle to the HID device
-extern hid_device* DeviceHandle;
+#include <setupapi.h>
+#include <dbt.h>
+}
 
-// Data buffers for HID communication
-extern uint8_t TxData[TxNum];
-extern uint8_t RxData[RxNum];
+#define TxNum 64		// the number of the buffer for sent data to HID
+#define RxNum 64		// the number of the buffer for received data from HID
 
-// State variables
-extern bool g_DeviceDetected;
-extern int Continue_Flag;
-extern bool ee_continue;
-extern int chan_num;
+#define HIDREPORTNUM 64+1		//	HID report num bytes
+#define HIDBUFSIZE 12
 
-// Circular buffer class definition
-class CircularBuffer {
-private:
-    std::vector<uint8_t> buffer[CIRCULAR_BUFFER_SIZE];
-    size_t head = 0;
-    size_t tail = 0;
+#define GetCmd		0x02			// return 0x02 command 
+#define ReadCmd		0x04			// Read command
 
-public:
-    bool push(std::vector<uint8_t>&& report);
-    bool pop(std::vector<uint8_t>& report);
-    bool empty() const;
-    size_t size() const;
-};
-
-// Core HID functions
+BOOL DeviceNameMatch(LPARAM lParam);
 bool FindTheHID();
 void CloseHandles();
-
-// SINGLE WriteHIDOutputReport function with default parameter
-bool WriteHIDOutputReport(int length = HIDREPORTNUM);
-
-// Read operations
+void DisplayInputReport();
+void DisplayReceivedData(char ReceivedByte);
+void GetDeviceCapabilities();
+void PrepareForOverlappedTransfer();
+void ReadAndWriteToDevice();
 void ReadHIDInputReport();
-bool ReadHIDInputReportFromQueue();
-bool ReadHIDInputReportBlocking(int timeout_ms);
-bool ReadHIDInputReportTimeout(int length, int timeout_ms);
-
-// Thread management functions
-void StartHidReadThread();
-void StopHidReadThread();
-size_t GetBufferSize();
-bool GetNextHidReport(std::vector<uint8_t>& report);
-int check_data_flow();
-
-// Add this function declaration
-void PrintHexData(const char* prefix, const uint8_t* data, int length);
+void RegisterForDeviceNotifications();
+void WriteHIDOutputReport();
