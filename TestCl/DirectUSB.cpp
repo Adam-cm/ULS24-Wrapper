@@ -862,7 +862,14 @@ void DirectUSB::PrintEndpointInfo() {
     printf("  bConfigurationValue: %d\n", config->bConfigurationValue);
     printf("  bNumInterfaces: %d\n", config->bNumInterfaces);
     printf("  bmAttributes: 0x%02X\n", config->bmAttributes);
+    
+    // Fix for Linux: Use MaxPower instead of bMaxPower
+    // The name differs between Windows and Linux versions of libusb
+#ifdef __linux__
+    printf("  MaxPower: %dmA\n", config->MaxPower * 2);
+#else
     printf("  MaxPower: %dmA\n", config->bMaxPower * 2);
+#endif
     
     // Loop through all interfaces
     for (uint8_t i = 0; i < config->bNumInterfaces; i++) {
