@@ -9,20 +9,15 @@
 #include <afx.h>
 #else
 #include <stdint.h>
+#include <string>
+#include <vector>
 typedef uint8_t BYTE;
 typedef int BOOL;
 #define TRUE 1
 #define FALSE 0
 typedef char TCHAR;
-#endif
-
-// Forward declare CString for non-Windows
-#ifndef _WIN32
-#include <string>
 typedef std::string CString;
 #endif
-
-#include <vector>
 
 #define TRIM_MAX_WORD 1024
 #define TRIM_IMAGER_SIZE 12
@@ -61,7 +56,7 @@ public:
 #ifdef _WIN32
 	CFile InFile;
 #else
-	// Provide a stub or file handle for non-Windows if needed
+	// Use std::ifstream for file operations on non-Windows
 #endif
 	CString WordBuf[TRIM_MAX_WORD];
 	CString CurWord;

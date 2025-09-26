@@ -3,18 +3,38 @@
 
 #pragma once
 
+#ifdef _WIN32
 #include <wtypes.h>
 #include <initguid.h>
+#else
+// Define Windows types for Linux
+#include <stdint.h>
+typedef uint32_t DWORD;
+typedef void* HANDLE;
+typedef int BOOL;
+typedef unsigned char BYTE;
+typedef unsigned short WORD;
+typedef long LONG;
+typedef unsigned long ULONG;
+typedef long long LONGLONG;
+typedef unsigned long long ULONGLONG;
+typedef void* HWND;
+typedef void* HDEVNOTIFY;
+typedef void* LPOVERLAPPED;
+typedef intptr_t LPARAM;
+#define TRUE 1
+#define FALSE 0
+#endif
 
 #define MAX_LOADSTRING 256
 
 extern "C" {
-
+#ifdef _WIN32
 	// This file is in the Windows DDK available from Microsoft.
 #include "hidsdi.h"
-
 #include <setupapi.h>
 #include <dbt.h>
+#endif
 }
 
 #define TxNum 64		// the number of the buffer for sent data to HID

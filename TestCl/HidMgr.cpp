@@ -1,37 +1,38 @@
 ﻿// Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
+#include <string>
 #include "HidMgr.h"
 #include "TrimReader.h"
 
 //Application global variables 
 
-DWORD								ActualBytesRead;
-DWORD								BytesRead;
-HIDP_CAPS							Capabilities;
-DWORD								cbBytesRead;
-PSP_DEVICE_INTERFACE_DETAIL_DATA	detailData;
-HANDLE								DeviceHandle;
-DWORD								dwError;
-char								FeatureReport[256];
-HANDLE								hEventObject;
-HANDLE								hDevInfo;
-GUID								HidGuid;
-OVERLAPPED							HIDOverlapped;
-char								InputReport[HIDREPORTNUM];
-ULONG								Length;
-LPOVERLAPPED						lpOverLap;
-bool								MyDeviceDetected = FALSE;
-CString								MyDevicePathName;
-DWORD								NumberOfBytesRead;
-char								OutputReport[HIDREPORTNUM];
-HANDLE								ReadHandle;
-DWORD								ReportType;
-ULONG								Required;
-CString								ValueToDisplay;
-HANDLE								WriteHandle;
+DWORD ActualBytesRead;
+DWORD BytesRead;
+HIDP_CAPS Capabilities;
+DWORD cbBytesRead;
+PSP_DEVICE_INTERFACE_DETAIL_DATA detailData;
+HANDLE DeviceHandle;
+DWORD dwError;
+char FeatureReport[256];
+HANDLE hEventObject;
+HANDLE hDevInfo;
+GUID HidGuid;
+OVERLAPPED HIDOverlapped;
+char InputReport[HIDREPORTNUM];
+ULONG Length;
+LPOVERLAPPED lpOverLap;
+bool MyDeviceDetected = false;
+std::string MyDevicePathName;
+DWORD NumberOfBytesRead;
+char OutputReport[HIDREPORTNUM];
+HANDLE ReadHandle;
+DWORD ReportType;
+ULONG Required;
+std::string ValueToDisplay;
+HANDLE WriteHandle;
 
-extern HWND							hWnd;
+extern HWND hWnd;
 
 //These are the vendor and product IDs to look for.
 //Uses Lakeview Research's Vendor ID.
@@ -427,7 +428,7 @@ void DisplayInputReport()
 	//Display the received data in the log and the Bytes Received List boxes.
 	//Start at the top of the List Box.
 
-//	m_BytesReceived.ResetContent();
+	//	m_BytesReceived.ResetContent();
 
 	//Step through the received bytes and display each.
 
@@ -485,16 +486,16 @@ void GetDeviceCapabilities()
 		&PreparsedData);
 	//	DisplayLastError("HidD_GetPreparsedData: ");
 
-		/*
-		API function: HidP_GetCaps
-		Learn the device's capabilities.
-		For standard devices such as joysticks, you can find out the specific
-		capabilities of the device.
-		For a custom device, the software will probably know what the device is capable of,
-		and the call only verifies the information.
-		Requires: the pointer to the buffer returned by HidD_GetPreparsedData.
-		Returns: a Capabilities structure containing the information.
-		*/
+	/*
+	API function: HidP_GetCaps
+	Learn the device's capabilities.
+	For standard devices such as joysticks, you can find out the specific
+	capabilities of the device.
+	For a custom device, the software will probably know what the device is capable of,
+	and the call only verifies the information.
+	Requires: the pointer to the buffer returned by HidD_GetPreparsedData.
+	Returns: a Capabilities structure containing the information.
+	*/
 
 	HidP_GetCaps
 	(PreparsedData,
@@ -594,8 +595,8 @@ void ReadAndWriteToDevice()
 	//Clear the List Box (optional).
 	//m_ResultsList.ResetContent();
 
-//	DisplayData("***HID Test Report***");
-//	DisplayCurrentTime();
+	//	DisplayData("***HID Test Report***");
+	//	DisplayCurrentTime();
 
 	//If the device hasn't been detected already, look for it.
 
@@ -653,9 +654,7 @@ void ReadHIDInputReport()
 
 	//	DisplayLastError("ReadFile: ") ;
 
-	//////////////////
-
-		/*API call:WaitForSingleObject
+	//////////////////	 /*API call:WaitForSingleObject
 		'Used with overlapped ReadFile.
 		'Returns when ReadFile has received the requested amount of data or on timeout.
 		'Requires an event object created with CreateEvent
@@ -840,4 +839,4 @@ void WriteHIDOutputReport()
 		MyDeviceDetected = FALSE;
 	}
 
-}
+}}

@@ -1,7 +1,14 @@
 // Copyright 2014-2017, Anitoa Systems, LLC
 // All rights reserved
 
-#include "stdafx.h"
+#include <string>
+#include <vector>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <cmath>
 #include "TrimReader.h"
 
 
@@ -76,6 +83,7 @@ CTrimReader::~CTrimReader()
 
 int CTrimReader::Load(TCHAR* fn)
 {
+#ifdef _WIN32
 	int e;
 	CString FileBuf;
 
@@ -116,6 +124,35 @@ int CTrimReader::Load(TCHAR* fn)
 	FileBuf.Empty();
 
 	return e;
+#else
+    std::ifstream inFile(fn);
+    if (!inFile.is_open()) {
+        fileLoaded = false;
+        return 0;
+    }
+    fileLoaded = true;
+    std::stringstream buffer;
+    buffer << inFile.rdbuf();
+    std::string FileBuf = buffer.str();
+    inFile.close();
+
+    std::string delimit = ", \t\r\n";
+    int i = 0;
+    // Trim left
+    FileBuf.erase(0, FileBuf.find_first_not_of(delimit));
+    int ep;
+    while (i < TRIM_MAX_WORD) {
+        ep = FileBuf.find_first_of(delimit);
+        if (ep == std::string::npos) break;
+        WordBuf[i] = FileBuf.substr(0, ep);
+        FileBuf = FileBuf.substr(ep);
+        FileBuf.erase(0, FileBuf.find_first_not_of(delimit));
+        i++;
+    }
+    MaxWord = i;
+    FileBuf.clear();
+    return 1;
+#endif
 }
 
 int CTrimReader::GetWord()
@@ -126,10 +163,17 @@ int CTrimReader::GetWord()
 	return WordIndex;
 }
 
+#ifdef _WIN32
 int CTrimReader::Match(CString s)
 {
-	return (int)(CurWord.Compare(s) == 0);
+    return (int)(CurWord.Compare(s) == 0);
 }
+#else
+int CTrimReader::Match(CString s)
+{
+    return (CurWord == s) ? 1 : 0;
+}
+#endif
 
 void CTrimReader::Parse()
 {
@@ -270,6 +314,7 @@ void CTrimReader::ParseNode()
 
 void CTrimReader::ParseMatrix()
 {
+#ifdef _WIN32
 	for (int i = 0; i < TRIM_IMAGER_SIZE; i++) {
 		for (int j = 0; j < 4; j++) {
 			if (GetWord() == MaxWord)
@@ -277,25 +322,57 @@ void CTrimReader::ParseMatrix()
 			curNode->kb[i][j] = _tstof((LPCTSTR)CurWord); // atof(CurWord);
 		}
 	}
+#else
+    for (int i = 0; i < TRIM_IMAGER_SIZE; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (GetWord() == MaxWord)
+                break;
+            try {
+                curNode->kb[i][j] = std::stod(CurWord);
+            } catch (...) {
+                curNode->kb[i][j] = 0.0;
+            }
+        }
+    }
+#endif
 }
 
 
 void CTrimReader::ParseArray(int gain)
 {
-	for (int i = 0; i < 12; i++) {
-		GetWord();
-		if (gain == 2)
-			curNode->tempcal[i] = _tstof((LPCTSTR)CurWord);
-		else
-			curNode->fpn[gain][i] = _tstof((LPCTSTR)CurWord);
-	}
+#ifdef _WIN32
+    for (int i = 0; i < 12; i++) {
+        GetWord();
+        if (gain == 2)
+            curNode->tempcal[i] = _tstof((LPCTSTR)CurWord);
+        else
+            curNode->fpn[gain][i] = _tstof((LPCTSTR)CurWord);
+    }
+#else
+    for (int i = 0; i < 12; i++) {
+        GetWord();
+        try {
+            double val = std::stod(CurWord);
+            if (gain == 2)
+                curNode->tempcal[i] = val;
+            else
+                curNode->fpn[gain][i] = val;
+        } catch (...) {
+            if (gain == 2)
+                curNode->tempcal[i] = 0.0;
+            else
+                curNode->fpn[gain][i] = 0.0;
+        }
+    }
+#endif
 }
 
 // gain: 0, 1 - auto_v20[0, 1]; 2: rampgen; 3: auto_v15
 
+#ifdef _WIN32
 void CTrimReader::ParseValue(int gain)
 {
-	GetWord();
+    GetWord();
 
 	CString word = CurWord;
 	word.MakeLower();
@@ -312,6 +389,33 @@ void CTrimReader::ParseValue(int gain)
 		curNode->auto_v15 = val;
 	else
 		curNode->auto_v20[gain] = val;
+}
+#else
+void CTrimReader::ParseValue(int gain)
+{
+    GetWord();
+    std::string word = CurWord;
+    // Make lower
+    std::transform(word.begin(), word.end(), word.begin(), ::tolower);
+    size_t p = word.find("0x");
+    size_t l = word.length();
+    if (p != std::string::npos) {
+        word = word.substr(p + 2, l - p - 2);
+    }
+    unsigned int val = 0;
+    try {
+        val = std::stoul(word, nullptr, 16);
+    } catch (...) {
+        val = 0;
+    }
+    if (gain == 2)
+        curNode->rampgen = val;
+    else if (gain == 3)
+        curNode->auto_v15 = val;
+    else
+        curNode->auto_v20[gain] = val;
+}
+#endif
 }
 
 #define DARK_LEVEL 100
@@ -530,8 +634,6 @@ int CTrimReader::ADCCorrectioni(int NumData, BYTE HighByte, BYTE LowByte, int pi
 		result = hbhn * 256 + lbc;
 	}
 
-	//	if (calib2) return result;
-
 #ifdef DARK_MANAGE
 
 	if (!gain_mode)
@@ -544,394 +646,6 @@ int CTrimReader::ADCCorrectioni(int NumData, BYTE HighByte, BYTE LowByte, int pi
 #endif
 
 	return result;
-}
-
-
-//========== Protocol Engine=================
-
-void CTrimReader::SetV20(BYTE v20)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x04;		//data type, date edit first byte
-	TxData[4] = v20;		//real data, date edit second byte
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void CTrimReader::SetGainMode(int gain)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x07;		//data type, date edit first byte
-	TxData[4] = gain;		//real data, date edit second byte
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void CTrimReader::SetV15(BYTE v15)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x05;		//data type, date edit first byte
-	TxData[4] = v15;		//real data, date edit second byte
-
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void CTrimReader::Capture12()
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x02;		//command
-	TxData[2] = 0x0C;		//data length
-	TxData[3] = 0x02;		//data type, date edit first byte
-	TxData[4] = 0xff;		//real data
-	TxData[5] = 0x00;		//‘§¡ÙŒª
-	TxData[6] = 0x00;
-	TxData[7] = 0x00;
-	TxData[8] = 0x00;
-	TxData[9] = 0x00;
-	TxData[10] = 0x00;
-	TxData[11] = 0x00;
-	TxData[12] = 0x00;
-	TxData[13] = 0x00;
-	TxData[14] = 0x00;
-	TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] + TxData[8] + TxData[9]
-		+ TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];		//check sum
-	if (TxData[15] == 0x17)
-		TxData[15] = 0x18;
-	else
-		TxData[15] = TxData[15];
-	TxData[16] = 0x17;		//back code
-	TxData[17] = 0x17;		//back code
-}
-
-void CTrimReader::Capture12(BYTE chan)
-{
-	if (chan < 1 || chan > 4)
-		return;
-
-	chan -= 1;
-
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x02;		//command
-	TxData[2] = 0x0C;		//data length
-	TxData[3] = (chan << 4) | 0x02;		//data type, date edit first byte
-	TxData[4] = 0xff;		//real data
-	TxData[5] = 0x00;		//
-	TxData[6] = 0x00;
-	TxData[7] = 0x00;
-	TxData[8] = 0x00;
-	TxData[9] = 0x00;
-	TxData[10] = 0x00;
-	TxData[11] = 0x00;
-	TxData[12] = 0x00;
-	TxData[13] = 0x00;
-	TxData[14] = 0x00;
-	TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] + TxData[8] + TxData[9]
-		+ TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];		//check sum
-	if (TxData[15] == 0x17)
-		TxData[15] = 0x18;
-	else
-		TxData[15] = TxData[15];
-	TxData[16] = 0x17;		//back code
-	TxData[17] = 0x17;		//back code
-}
-
-void CTrimReader::Capture24()
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x02;		//command
-	TxData[2] = 0x0C;		//data length
-	TxData[3] = 0x08;		//data type, date edit first byte
-	TxData[4] = 0xff;		//real data
-	TxData[5] = 0x00;		//‘§¡ÙŒª
-	TxData[6] = 0x00;
-	TxData[7] = 0x00;
-	TxData[8] = 0x00;
-	TxData[9] = 0x00;
-	TxData[10] = 0x00;
-	TxData[11] = 0x00;
-	TxData[12] = 0x00;
-	TxData[13] = 0x00;
-	TxData[14] = 0x00;
-	TxData[15] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7] + TxData[8] + TxData[9]
-		+ TxData[10] + TxData[11] + TxData[12] + TxData[13] + TxData[14];		//check sum
-	if (TxData[15] == 0x17)
-		TxData[15] = 0x18;
-	else
-		TxData[15] = TxData[15];
-	TxData[16] = 0x17;		//back code
-	TxData[17] = 0x17;		//back code
-}
-
-void  CTrimReader::SetRangeTrim(BYTE range)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x02;		//data type, date edit first byte
-	TxData[4] = range;	//real data, date edit second byte
-	//0x01 means send vedio data
-	//0x00 means stop vedio data
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void  CTrimReader::SetRampgen(BYTE rampgen)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x01;		//data type, date edit first byte
-	TxData[4] = rampgen;	//real data, date edit second byte
-	//0x01 means send video data
-	//0x00 means stop video data
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void  CTrimReader::SetTXbin(BYTE txbin)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x08;		//data type, date edit first byte
-	TxData[4] = txbin;	//real data, date edit second byte
-	//0x01 means send vedio data
-	//0x00 means stop vedio data
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void CTrimReader::SetLEDConfig(BOOL IndvEn, BOOL Chan1, BOOL Chan2, BOOL Chan3, BOOL Chan4)
-{
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x02;		//data length
-	TxData[3] = 0x23;		//data type, date edit first byte
-
-	if (!IndvEn)
-	{
-		TxData[4] = Chan1 ? 1 : 0;									//real data, date edit second byte
-	}
-	else
-	{
-		TxData[4] = 0x80;
-		if (Chan1)
-			TxData[4] |= 1;
-		if (Chan2)
-			TxData[4] |= 2;
-		if (Chan3)
-			TxData[4] |= 4;
-		if (Chan4)
-			TxData[4] |= 8;
-	}
-
-	TxData[5] = TxData[1] + TxData[2] + TxData[3] + TxData[4];		//check sum
-
-	if (TxData[5] == 0x17)
-		TxData[5] = 0x18;
-	else
-		TxData[5] = TxData[5];
-
-	TxData[6] = 0x17;		//back code
-	TxData[7] = 0x17;		//back code
-}
-
-void  CTrimReader::SetIntTime(float int_t)
-{
-	unsigned char* hData = (unsigned char*)&int_t;	//
-
-	BYTE TrimBuf[8];
-
-	TrimBuf[0] = hData[0];	//buffer
-	TrimBuf[1] = hData[1];
-	TrimBuf[2] = hData[2];
-	TrimBuf[3] = hData[3];
-
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x05;		//data length
-	TxData[3] = 0x20;		//data type, date edit first byte
-	TxData[4] = TrimBuf[0];		//real data, date edit second byte
-	TxData[5] = TrimBuf[1];
-	TxData[6] = TrimBuf[2];
-	TxData[7] = TrimBuf[3];
-	//0x01 means send vedio data
-	//0x00 means stop vedio data
-	TxData[8] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5] + TxData[6] + TxData[7];		//check sum
-	if (TxData[8] == 0x17)
-		TxData[8] = 0x18;
-	else
-		TxData[5] = TxData[5];
-	TxData[9] = 0x17;		//back code
-	TxData[10] = 0x17;		//back code
-}
-
-void CTrimReader::SelSensor(BYTE i)
-{
-	// TODO: Add your control notification handler code here
-
-	if (i < 1 || i > 4) return;
-
-	TxData[0] = 0xaa;		//preamble code
-	TxData[1] = 0x01;		//command
-	TxData[2] = 0x03;		//data length
-	TxData[3] = 0x26;		//data type
-	TxData[4] = i - 1;		//real data
-	TxData[5] = 0x00;
-	TxData[6] = TxData[1] + TxData[2] + TxData[3] + TxData[4] + TxData[5];		//check sum
-	if (TxData[6] == 0x17)
-		TxData[6] = 0x18;
-	else
-		TxData[6] = TxData[6];
-	TxData[7] = 0x17;		//back code
-	TxData[8] = 0x17;		//back code
-}
-
-#define dppage12 0x02		// display one page with 12 pixel
-#define dppage24 0x08		// display one page with 24 pixel
-
-int CTrimReader::ProcessRowData(int (*adc_data)[24], int gain_mode)
-{
-	int result;
-
-	int flag, ncol = 12;
-
-	int FrameSize = 0;
-
-	BYTE type = RxData[4];	//
-
-	switch (type)
-	{
-	case dppage12:		// 
-		ncol = 12;
-		FrameSize = 0;
-		break;
-
-	case dppage24:		// 
-		ncol = 24;
-		FrameSize = 1;
-		break;
-
-	default:
-		break;
-	}
-
-
-	for (int i = 0; i < ncol; i++)
-	{
-		result = ADCCorrectioni(i, RxData[i * 2 + 7], RxData[i * 2 + 6], ncol, chan_num, gain_mode, &flag);	// data stride is 2
-
-		unsigned int rn = RxData[5];
-		unsigned int cn = i;
-
-		adc_data[rn][cn] = result;
-
-		if (adc_data[rn][cn] < 0) adc_data[rn][cn] = 0;
-	}
-
-	return FrameSize;
-}
-
-BYTE CTrimReader::TrimBuff2Byte()
-{
-	BYTE r;
-
-	r = trim_buff[tbuff_rptr];
-	tbuff_rptr++;
-
-	return r;
-}
-
-void CTrimReader::CopyEepromBuffAndRestore()
-{
-	for (int j = 0; j < EPKT_SZ; j++) {			// parity not copied
-		trim_buff[j] = EepromBuff[0][j];		// copy first page
-	}
-
-	RestoreFromTrimBuff();
-
-	for (int i = 1; i < num_pages; i++) {
-		for (int j = 0; j < EPKT_SZ; j++) {			// parity not copied
-			trim_buff[i * EPKT_SZ + j] = EepromBuff[i][j];
-		}
-	}
-}
-
-void CTrimReader::RestoreFromTrimBuff()
-{
-	// restore trimbuff header first
-
-	tbuff_rptr = 0;				// initialize read pointer
-
-	id = TrimBuff2Byte();
-
-	if (id != 0xa5) {
-		serial_number1 = TrimBuff2Byte();
-		serial_number2 = TrimBuff2Byte();
-		num_channels = TrimBuff2Byte();
-		num_wells = TrimBuff2Byte();
-		num_pages = TrimBuff2Byte();
-	}
-	else {
-		version = TrimBuff2Byte();
-		num_pages = TrimBuff2Byte();
-
-		id_str.clear();
-		for (int i = 0; i < 32; i++) {
-			id_str.push_back(TrimBuff2Byte());
-
-			//	TrimBuff2Byte();
-		}
-
-		serial_number1 = TrimBuff2Byte();
-		serial_number2 = TrimBuff2Byte();
-
-		num_channels = TrimBuff2Byte();
-		num_wells = TrimBuff2Byte();
-
-		well_format = TrimBuff2Byte();
-
-		channel_format = TrimBuff2Byte();	// 
-
-		// TrimBuff2Byte();
-	}
 }
 
 
@@ -1112,13 +826,19 @@ int  CTrimReader::WriteTrimBuff(int k)
 
 int CTrimReader::TrimBuff2Int(int i)
 {
-	_int16 r;		// this is necessary to get negative value correctly
-	int k = Node[i].tbuff_rptr;
-
-	r = (Node[i].trim_buff[k] << 8) | (Node[i].trim_buff[k + 1]);
-	Node[i].tbuff_rptr += 2;
-
-	return (int)r;
+#ifdef _WIN32
+    _int16 r; // Windows-specific
+    int k = Node[i].tbuff_rptr;
+    r = (Node[i].trim_buff[k] << 8) | (Node[i].trim_buff[k + 1]);
+    Node[i].tbuff_rptr += 2;
+    return (int)r;
+#else
+    int16_t r;
+    int k = Node[i].tbuff_rptr;
+    r = (Node[i].trim_buff[k] << 8) | (Node[i].trim_buff[k + 1]);
+    Node[i].tbuff_rptr += 2;
+    return (int)r;
+#endif
 }
 
 BYTE CTrimReader::TrimBuff2Byte(int i)
@@ -1137,7 +857,7 @@ void  CTrimReader::RestoreTrimBuff(int k)
 	Node[k].tbuff_rptr = 0;				// initialize read pointer
 
 	BYTE b0, b1, b2;
-	//	CString cid;
+	//CString cid;
 
 	b0 = TrimBuff2Byte(k);
 	b1 = TrimBuff2Byte(k);
